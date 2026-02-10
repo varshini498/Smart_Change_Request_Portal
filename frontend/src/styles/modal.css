@@ -1,0 +1,73 @@
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.modal {
+  background: white;
+  width: 500px;
+  padding: 25px;
+  border-radius: 12px;
+}
+
+.modal h2 {
+  margin-bottom: 15px;
+}
+
+.employee-comment {
+  background: #f1f5f9;
+  padding: 10px;
+  border-radius: 6px;
+}
+
+textarea {
+  width: 100%;
+  height: 80px;
+  margin-top: 10px;
+  padding: 10px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.approve {
+  background: #22c55e;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+}
+
+.reject {
+  background: #ef4444;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+}
+
+.close {
+  background: #64748b;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+}
+
+.badge.overdue {
+  background: red;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}

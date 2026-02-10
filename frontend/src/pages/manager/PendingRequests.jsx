@@ -1,31 +1,40 @@
-import { useEffect, useState } from "react";
-import API from "../../api/axios";
+import { useState, useEffect } from 'react';
+import API from '../../api/axios';
 
 export default function PendingRequests() {
-  const [list, setList] = useState([]);
+  const [requests, setRequests] = useState([]);
 
-  const load = () => {
-    API.get("/requests/pending")
-      .then(res => setList(res.data.requests));
+  const fetchPending = () => {
+    API.get('/requests/pending')
+      .then(res => setRequests(res.data.requests))
+      .catch(err => console.error(err));
   };
 
-  useEffect(load, []);
+  useEffect(() => { fetchPending(); }, []);
 
-  const approve = id => API.put(`/requests/${id}/approve`).then(load);
-  const reject = id => API.put(`/requests/${id}/reject`).then(load);
+  const handleAction = async (id, action) => {
+    try {
+      await API.put(`/requests/${id}/${action}`, { comment: `${action} by manager` });
+      fetchPending();
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   return (
     <div>
       <h2>Pending Requests</h2>
-      {list.map(r => (
-        <div key={r.id}>
-          <b>{r.title}</b>
-          {r.isOverdue && <span style={{color:"red"}}> Overdue</span>}
-          <br />
-          <button onClick={() => approve(r.id)}>Approve</button>
-          <button onClick={() => reject(r.id)}>Reject</button>
-        </div>
-      ))}
+      {requests.length === 0 && <p>No pending requests.</p>}
+      <ul>
+        {requests.map(r => (
+          <li key={r.id}>
+            {r.title} - {r.status} {r.isOverdue && <span style={{ color:'red' }}>Overdue</span>}
+           <button className="approve-btn" onClick={()=>handleAction(r.id,'approve')}>Approve</button>
+<button className="reject-btn" onClick={()=>handleAction(r.id,'reject')}>Reject</button>
+
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

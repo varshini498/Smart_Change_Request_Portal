@@ -1,43 +1,34 @@
 const Database = require('better-sqlite3');
-const db = new Database('database.db');
+const path = require('path');
 
-/* ============================
-   USERS TABLE
-   ============================ */
+const db = new Database(path.join(__dirname, 'utr.db'));
+
+// Create users table
 db.prepare(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
+    email TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
-    role TEXT NOT NULL
+    role TEXT NOT NULL,
+    roll_no TEXT NOT NULL
   )
 `).run();
 
-/* ============================
-   REQUESTS TABLE
-   ============================ */
+// Create requests table
 db.prepare(`
   CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     description TEXT NOT NULL,
-
-    status TEXT NOT NULL DEFAULT 'Pending',
-
+    status TEXT NOT NULL,
     createdBy INTEGER NOT NULL,
-
-    priority TEXT NOT NULL DEFAULT 'MEDIUM',
-
-    dateCreated TEXT NOT NULL,
+    priority TEXT,
+    dateCreated TEXT,
     dueDate TEXT,
-
     comment TEXT,
-
-    actionBy TEXT,
-    actionDate TEXT,
-
-    FOREIGN KEY (createdBy) REFERENCES users(id)
+    actionBy INTEGER,
+    actionDate TEXT
   )
 `).run();
 
