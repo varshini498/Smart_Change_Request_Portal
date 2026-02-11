@@ -1,19 +1,25 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Login from "./auth/Login";
-import Register from "./auth/Register";
-import EmployeeDashboard from "./pages/employee/EmployeeDashboard";
-import Dashboard from "./pages/manager/Dashboard";
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider } from './auth/AuthContext'; // 1. Import the Provider
 
-export default function App() {
+import Login from './auth/Login'; 
+import ManagerDashboard from './pages/manager/Dashboard';
+import EmployeeDashboard from './pages/employee/EmployeeDashboard';
+
+function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
-        <Route path="/manager/dashboard" element={<Dashboard />} />
-
-      </Routes>
-    </BrowserRouter>
+    // 2. Wrap everything here!
+    <AuthProvider> 
+      <Router>
+        <Routes>
+          <Route path="/" element={<Login />} />
+          <Route path="/manager/dashboard" element={<ManagerDashboard />} />
+          <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
+      </Router>
+    </AuthProvider>
   );
 }
+
+export default App;
