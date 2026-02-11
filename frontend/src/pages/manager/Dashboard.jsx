@@ -10,6 +10,9 @@ export default function Dashboard() {
   const [showProfile, setShowProfile] = useState(false); 
   const [view, setView] = useState('Pending'); 
   const [comment, setComment] = useState("");
+  
+  const [filterCategory, setFilterCategory] = useState("All");
+  const [searchTerm, setSearchTerm] = useState(""); 
 
   const name = user?.name || localStorage.getItem('name') || "asha";
   const email = localStorage.getItem('email') || "Not Found";
@@ -22,12 +25,48 @@ export default function Dashboard() {
       setStats(statsRes.data.counts || { pending: 0, approved: 0, rejected: 0 });
       const endpoint = view === 'Pending' ? '/requests/pending' : '/requests/all';
       const reqRes = await API.get(endpoint);
-      const data = view === 'Pending' ? reqRes.data.requests : reqRes.data.requests.filter(r => r.status === view);
+      
+      let data = view === 'Pending' ? reqRes.data.requests : reqRes.data.requests.filter(r => r.status === view);
+      
+      if (filterCategory !== "All") {
+        data = data.filter(r => r.category === filterCategory);
+      }
+      
       setRequests(data || []);
     } catch (err) { console.error(err); }
   };
 
-  useEffect(() => { loadData(); }, [view]);
+  useEffect(() => { loadData(); }, [view, filterCategory]);
+
+  const exportToCSV = () => {
+    if (requests.length === 0) return alert("No data to export");
+    const headers = "ID,Sender ID,Title,Category,Status,Due Date,Date Created\n";
+    const rows = requests.map(req => 
+      `${req.id},${req.createdBy},"${req.title}","${req.category || 'General'}",${req.status},${req.dueDate},${req.dateCreated}`
+    ).join("\n");
+    const blob = new Blob([headers + rows], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SmartCR_${view}_Report.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const filteredRequests = requests.filter(req => 
+    req.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    req.createdBy.toString().includes(searchTerm)
+  );
+
+  const getRowStyle = (dueDate, status) => {
+    if (status !== 'Pending') return styles.tr;
+    const today = new Date();
+    const due = new Date(dueDate);
+    const diffDays = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return { ...styles.tr, background: '#fff1f2' }; 
+    if (diffDays <= 2) return { ...styles.tr, background: '#fffbeb' }; 
+    return styles.tr;
+  };
 
   const handleAction = async (id, action) => {
     try {
@@ -57,9 +96,37 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <header style={{ marginBottom: '30px', marginTop: '20px' }}>
-          <h1 style={{ margin: 0 }}>Hi, {name} 👋</h1>
-          <p style={{ color: '#64748b' }}>Viewing <b>{view}</b> requests.</p>
+        <header style={{ marginBottom: '30px', marginTop: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+          <div>
+            <h1 style={{ margin: 0 }}>Hi, {name} 👋</h1>
+            <p style={{ color: '#64748b' }}>Viewing <b>{view}</b> requests.</p>
+          </div>
+
+          <div style={{ display: 'flex', gap: '15px', alignItems: 'flex-end' }}>
+            <div style={{ textAlign: 'left' }}>
+               <label style={styles.filterLabel}>Search Requests</label>
+               <input 
+                 type="text" 
+                 placeholder="Search title or ID..." 
+                 style={styles.searchInput} 
+                 value={searchTerm}
+                 onChange={(e) => setSearchTerm(e.target.value)}
+               />
+            </div>
+
+            <div style={{ textAlign: 'right' }}>
+              <label style={styles.filterLabel}>Filter Category</label>
+              <select style={styles.filterDropdown} value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
+                <option value="All">All Categories</option>
+                <option value="UI Change">UI Change</option>
+                <option value="Backend Update">Backend Update</option>
+                <option value="Security Patch">Security Patch</option>
+                <option value="Database Migration">Database Migration</option>
+                <option value="Personal">Personal</option>
+                <option value="Others">Others</option>
+              </select>
+            </div>
+          </div>
         </header>
 
         <div style={styles.statsGrid}>
@@ -71,23 +138,54 @@ export default function Dashboard() {
         <div style={styles.tableCard}>
           <table style={styles.table}>
             <thead style={styles.thead}>
-              <tr><th style={styles.th}>SENDER ID</th><th style={styles.th}>TITLE</th><th style={styles.th}>{view === 'Pending' ? 'DUE DATE' : 'PROCESSED ON'}</th><th style={styles.th}>ACTION</th></tr>
+              <tr>
+                <th style={styles.th}>SENDER ID</th>
+                <th style={styles.th}>TITLE</th>
+                <th style={styles.th}>CATEGORY</th>
+                <th style={styles.th}>{view === 'Pending' ? 'DUE DATE' : 'PROCESSED ON'}</th>
+                <th style={styles.th}>ACTION</th>
+              </tr>
             </thead>
             <tbody>
-              {requests.map(req => (
-                <tr key={req.id} style={styles.tr}>
-                  <td style={styles.td}><strong>{req.createdBy}</strong></td>
-                  <td style={styles.td}>{req.title}</td>
-                  <td style={styles.td}>{view === 'Pending' ? req.dueDate : new Date(req.actionDate).toLocaleDateString()}</td>
-                  <td style={styles.td}><button onClick={() => setSelected(req)} style={styles.processBtn}>{view === 'Pending' ? 'Review' : 'View Info'}</button></td>
-                </tr>
-              ))}
+              {filteredRequests.length > 0 ? (
+                filteredRequests.map(req => (
+                  <tr key={req.id} style={getRowStyle(req.dueDate, req.status)}>
+                    <td style={styles.td}><strong>{req.createdBy}</strong></td>
+                    <td style={styles.td}>
+                      {req.title}
+                      {view === 'Pending' && new Date(req.dueDate) < new Date() && (
+                        <span style={styles.overdueBadge}>OVERDUE</span>
+                      )}
+                    </td>
+                    <td style={styles.td}>
+                      <span style={{
+                        ...styles.categoryTag,
+                        background: req.category === 'Personal' ? '#f3e8ff' : req.category === 'Others' ? '#f1f5f9' : '#e2e8f0',
+                        color: req.category === 'Personal' ? '#7e22ce' : req.category === 'Others' ? '#64748b' : '#475569',
+                      }}>
+                        {req.category || 'General'}
+                      </span>
+                    </td>
+                    <td style={styles.td}>{view === 'Pending' ? req.dueDate : new Date(req.actionDate).toLocaleDateString()}</td>
+                    <td style={styles.td}><button onClick={() => setSelected(req)} style={styles.processBtn}>{view === 'Pending' ? 'Review' : 'View Info'}</button></td>
+                  </tr>
+                ))
+              ) : (
+                <tr><td colSpan="5" style={{ padding: '40px', textAlign: 'center', color: '#94a3b8' }}>No results found.</td></tr>
+              )}
             </tbody>
           </table>
         </div>
+
+        {/* Feature 7: Export Button at the Bottom Center */}
+        <div style={styles.bottomActionArea}>
+           <button onClick={exportToCSV} style={styles.exportBtn}>
+             📥 Export {view} History to CSV
+           </button>
+        </div>
       </div>
 
-      {/* --- PROFILE DRAWER --- */}
+      {/* --- PROFILE DRAWER & MODAL --- */}
       {showProfile && (
         <div style={styles.profileDrawerOverlay} onClick={() => setShowProfile(false)}>
           <div style={styles.profileDrawer} onClick={(e) => e.stopPropagation()}>
@@ -105,21 +203,24 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* --- MODAL --- */}
       {selected && (
         <div style={styles.overlay}>
           <div style={styles.modal}>
             <h3 style={{marginTop: 0}}>Request Details</h3>
+            <div style={styles.timelineContainer}>
+              <div style={styles.timelineStep}><div style={styles.circleActive}>1</div><p>Submitted</p></div>
+              <div style={{...styles.line, background: selected.status !== 'Pending' ? '#3b82f6' : '#e2e8f0'}} />
+              <div style={styles.timelineStep}><div style={selected.status !== 'Pending' ? styles.circleActive : styles.circleInactive}>2</div><p>Decision</p></div>
+            </div>
             <div style={styles.infoBox}>
-              <p><strong>Request ID:</strong> {selected.id}</p>
-              <p><strong>Employee ID:</strong> {selected.createdBy}</p>
+              <p><strong>Category:</strong> {selected.category || 'General'}</p>
               <p><strong>Title:</strong> {selected.title}</p>
               <p><strong>Description:</strong> {selected.description}</p>
-              <p><strong>Created On:</strong> {new Date(selected.dateCreated).toLocaleDateString()}</p>
+              {selected.attachment && <p><strong>Attachment:</strong> <a href={selected.attachment} target="_blank" rel="noreferrer" style={{color: '#3b82f6', textDecoration: 'underline'}}>View File</a></p>}
             </div>
             {view === 'Pending' ? (
                <>
-                <textarea placeholder="Comment..." style={styles.textarea} value={comment} onChange={(e) => setComment(e.target.value)} />
+                <textarea placeholder="Write feedback..." style={styles.textarea} value={comment} onChange={(e) => setComment(e.target.value)} />
                 <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
                   <button onClick={() => handleAction(selected.id, 'approve')} style={styles.approveBtn}>APPROVE</button>
                   <button onClick={() => handleAction(selected.id, 'reject')} style={styles.rejectBtn}>REJECT</button>
@@ -155,7 +256,7 @@ const styles = {
   cardVal: { margin: '10px 0 0', fontSize: '32px', fontWeight: '800' },
   tableCard: { background: 'white', borderRadius: '25px', boxShadow: '0 10px 15px rgba(0,0,0,0.05)', overflow: 'hidden' },
   table: { width: '100%', borderCollapse: 'collapse' },
-  thead: { textAlign: 'left', color: '#64748b', fontSize: '12px' },
+  thead: { textAlign: 'left', color: '#64748b', fontSize: '12px', background: '#f8fafc' },
   th: { padding: '20px' },
   tr: { borderBottom: '1px solid #f1f5f9' },
   td: { padding: '20px', fontSize: '14px' },
@@ -174,5 +275,36 @@ const styles = {
   approveBtn: { flex: 1, background: '#22c55e', color: 'white', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
   rejectBtn: { flex: 1, background: '#ef4444', color: 'white', border: 'none', padding: '12px', borderRadius: '10px', fontWeight: 'bold', cursor: 'pointer' },
   closeBtn: { background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontWeight: 'bold' },
-  closeBtnX: { background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer' }
+  closeBtnX: { background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer' },
+  overdueBadge: { background: '#ef4444', color: 'white', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', marginLeft: '10px', fontWeight: 'bold' },
+  categoryTag: { fontSize: '11px', padding: '4px 8px', borderRadius: '6px', fontWeight: 'bold', display: 'inline-block' },
+  filterLabel: { fontSize: '12px', fontWeight: 'bold', color: '#64748b', display: 'block', marginBottom: '5px' },
+  filterDropdown: { padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '14px', background: 'white', cursor: 'pointer' },
+  searchInput: { padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '14px', width: '200px', outline: 'none' },
+  
+  // Feature 7 Updated Style: Centered Bottom Action Area
+  bottomActionArea: {
+    display: 'flex',
+    justifyContent: 'center',
+    padding: '40px 0',
+    marginTop: '20px',
+  },
+  exportBtn: { 
+    background: '#0f172a', 
+    color: 'white', 
+    border: 'none', 
+    padding: '14px 28px', 
+    borderRadius: '12px', 
+    cursor: 'pointer', 
+    fontSize: '15px', 
+    fontWeight: 'bold',
+    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)',
+    transition: 'transform 0.2s',
+  },
+
+  timelineContainer: { display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '20px 0' },
+  timelineStep: { textAlign: 'center', fontSize: '11px' },
+  circleActive: { width: '25px', height: '25px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px', fontWeight: 'bold' },
+  circleInactive: { width: '25px', height: '25px', borderRadius: '50%', background: '#e2e8f0', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px' },
+  line: { flex: 1, height: '2px', margin: '0 10px', marginBottom: '20px' },
 };

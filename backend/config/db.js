@@ -15,7 +15,7 @@ db.prepare(`
   )
 `).run();
 
-// Create requests table
+// Create requests table - UPDATED with category and attachment
 db.prepare(`
   CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,6 +24,8 @@ db.prepare(`
     status TEXT NOT NULL,
     createdBy INTEGER NOT NULL,
     priority TEXT,
+    category TEXT,    -- Added: Feature 4 (Categories)
+    attachment TEXT,  -- Added: Feature 2 (Links/Documents)
     dateCreated TEXT,
     dueDate TEXT,
     comment TEXT,
