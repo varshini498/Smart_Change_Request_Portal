@@ -2,24 +2,24 @@ Smart Change Request Portal is a full-stack web application that digitizes and s
 
 Features
 
-Secure login with role-based access (Employee / Manager)
-
-Submit and track change requests
-
-Approve or reject requests
-
-Real-time status updates
-
-Dashboard analytics
-
-Export request data to CSV
+    Secure login with role-based access (Employee / Manager)
+    
+    Submit and track change requests
+    
+    Approve or reject requests
+    
+    Real-time status updates
+    
+    Dashboard analytics
+    
+    Export request data to CSV
 
 Tech Stack
 
-Frontend: React.js
-
-Backend: Node.js, Express.js
-
-Database: SQLite
-
-Authentication: JWT
+    Frontend: React.js
+    
+    Backend: Node.js, Express.js
+    
+    Database: SQLite
+    
+    Authentication: JWT
