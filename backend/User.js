@@ -1,13 +1,27 @@
-// backend/User.js
-const { DataTypes } = require('sequelize');
-const sequelize = require('./config/db');
+const db = require('./config/db'); // Ensure this points to your better-sqlite3 instance
 
-const User = sequelize.define('User', {
-  name: { type: DataTypes.STRING, allowNull: false },
-  roll_no: { type: DataTypes.STRING, allowNull: false },
-  email: { type: DataTypes.STRING, allowNull: false, unique: true },
-  password: { type: DataTypes.STRING, allowNull: false },
-  role: { type: DataTypes.STRING, allowNull: false }
-});
+const User = {
+  // FEATURE: Restored Identity View & Live Analytics
+  findAll: () => {
+    try {
+      const stmt = db.prepare("SELECT id, name, email, role, roll_no FROM users");
+      return stmt.all(); // This restores all user info for the registry
+    } catch (err) {
+      console.error("Database Error in findAll:", err);
+      return [];
+    }
+  },
+
+  // FEATURE: Master Admin Login
+  findByEmail: (email) => {
+    try {
+      const stmt = db.prepare("SELECT * FROM users WHERE email = ?");
+      return stmt.get(email); // Returns the specific user for RBAC verification
+    } catch (err) {
+      console.error("Database Error in findByEmail:", err);
+      return null;
+    }
+  }
+};
 
 module.exports = User;

@@ -6,7 +6,7 @@ import Login from './auth/Login';
 import Register from './auth/Register'; // ✅ ADD THIS IMPORT
 import ManagerDashboard from './pages/manager/Dashboard';
 import EmployeeDashboard from './pages/employee/EmployeeDashboard';
-
+import AdminDashboard from './pages/admin/AdminDashboard';
 function App() {
   return (
     <AuthProvider> 
@@ -16,6 +16,7 @@ function App() {
           <Route path="/register" element={<Register />} /> {/* ✅ ADD THIS ROUTE */}
           <Route path="/manager/dashboard" element={<ManagerDashboard />} />
           <Route path="/employee/dashboard" element={<EmployeeDashboard />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Router>
