@@ -138,6 +138,8 @@ const modalContent = {
   padding: "20px",
   borderRadius: "10px",
   width: "400px",
+  maxHeight: "80vh",
+  overflowY: "auto",
 };
 
 export default ManagerRequests;

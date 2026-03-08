@@ -1,0 +1,129 @@
+import { useEffect, useRef, useState } from 'react';
+import { Menu, X } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import ThemeToggle from './ThemeToggle';
+import NotificationBell from './NotificationBell';
+
+export default function AppShell({ title, subtitle, navItems = [], children }) {
+  const [open, setOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const profileRef = useRef(null);
+
+  const name = localStorage.getItem('name') || 'User';
+  const dashboardThemePaths = new Set([
+    '/employee/dashboard',
+    '/teamlead/dashboard',
+    '/manager/dashboard',
+    '/admin/dashboard',
+    '/employee-dashboard',
+    '/teamlead-dashboard',
+    '/manager-dashboard',
+    '/admin-dashboard',
+  ]);
+  const showThemeToggle = dashboardThemePaths.has(location.pathname);
+
+  const logout = () => {
+    localStorage.clear();
+    navigate('/login');
+  };
+
+  useEffect(() => {
+    const onDocClick = (event) => {
+      if (!profileRef.current) return;
+      if (!profileRef.current.contains(event.target)) setProfileOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  return (
+    <div className="page-shell">
+      <aside className={`sidebar ${open ? 'open' : ''}`}>
+        <div className="brand">SmartCR Portal</div>
+        <div className="nav-list">
+          {navItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={`nav-item ${item.active ? 'active' : ''}`}
+              onClick={() => {
+                item.onClick?.();
+                setOpen(false);
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </aside>
+
+      <main className="main-panel">
+        <header className="topbar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button type="button" className="mobile-menu" onClick={() => setOpen(!open)}>
+              {open ? <X size={16} /> : <Menu size={16} />}
+            </button>
+            <div className="topbar-left">
+              <h1>{title}</h1>
+              <p>{subtitle}</p>
+            </div>
+          </div>
+          <div className="topbar-right">
+            {showThemeToggle ? <ThemeToggle /> : null}
+            <NotificationBell />
+            <div ref={profileRef} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="avatar-btn"
+                title="Profile"
+                onClick={() => setProfileOpen((value) => !value)}
+              >
+                {name[0]?.toUpperCase() || 'U'}
+              </button>
+              {profileOpen && (
+                <div style={styles.profileMenu}>
+                  <button type="button" style={styles.profileItem} onClick={() => { setProfileOpen(false); navigate('/profile'); }}>
+                    View Profile
+                  </button>
+                  <button type="button" style={styles.profileItem} onClick={() => { setProfileOpen(false); navigate('/profile'); }}>
+                    Change Password
+                  </button>
+                  <button type="button" style={styles.profileItem} onClick={logout}>
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+        <section className="page-content">{children}</section>
+      </main>
+    </div>
+  );
+}
+
+const styles = {
+  profileMenu: {
+    position: 'absolute',
+    right: 0,
+    top: '44px',
+    minWidth: '180px',
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
+    borderRadius: '12px',
+    boxShadow: 'var(--shadow)',
+    zIndex: 3400,
+    overflow: 'hidden',
+  },
+  profileItem: {
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    textAlign: 'left',
+    padding: '10px 12px',
+    cursor: 'pointer',
+    color: 'var(--text)',
+  },
+};

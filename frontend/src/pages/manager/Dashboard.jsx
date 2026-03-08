@@ -1,438 +1,264 @@
-import React, { useEffect, useState, useContext } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import API from '../../api/axios';
-import { AuthContext } from '../../auth/AuthContext';
+import AppShell from '../../components/AppShell';
+import StatCard from '../../components/StatCard';
+import StatusBadge from '../../components/StatusBadge';
+import DeadlineBadge from '../../components/DeadlineBadge';
+import ToastMessage from '../../components/ToastMessage';
+import RequestTimeline from '../../components/RequestTimeline';
+import ApprovalFlowTimeline from '../../components/ApprovalFlowTimeline';
 
 export default function Dashboard() {
-  const { user } = useContext(AuthContext);
+  const navigate = useNavigate();
   const [stats, setStats] = useState({ pending: 0, approved: 0, rejected: 0 });
+  const [deadlineStats, setDeadlineStats] = useState({ dueToday: 0, overdue: 0 });
   const [requests, setRequests] = useState([]);
+  const [view, setView] = useState('Pending');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [category, setCategory] = useState('All');
   const [selected, setSelected] = useState(null);
-  const [showProfile, setShowProfile] = useState(false); 
-  const [view, setView] = useState('Pending'); 
-  const [comment, setComment] = useState("");
-  
-  const [filterCategory, setFilterCategory] = useState("All");
-  const [searchTerm, setSearchTerm] = useState(""); 
-
-  const name = user?.name || localStorage.getItem('name') || "Manager";
-  const email = user?.email || localStorage.getItem('email') || "Not Registered";
-  const rollNo = user?.roll_no || localStorage.getItem('roll_no') || "Not Found";
-  const role = user?.role || localStorage.getItem('role') || "Manager";
+  const [selectedFlow, setSelectedFlow] = useState(null);
+  const [comment, setComment] = useState('');
+  const [processing, setProcessing] = useState(false);
+  const [toast, setToast] = useState({ message: '', type: 'success' });
+  const role = localStorage.getItem('role') || '';
+  const roleLabel = role === 'TEAM_LEAD' ? 'Team Lead' : 'Manager';
+  const normalizeStatus = (value) => String(value || '').trim().toUpperCase().replace(/\s+/g, '_');
 
   const loadData = async () => {
     try {
       const statsRes = await API.get('/requests/dashboard/counts');
       setStats(statsRes.data.counts || { pending: 0, approved: 0, rejected: 0 });
+      const pendingAlertsRes = await API.get('/requests/pending');
+      const pendingAlerts = pendingAlertsRes.data.requests || [];
+      setDeadlineStats({
+        dueToday: pendingAlerts.filter((r) => r.deadline_status === 'DUE_TODAY').length,
+        overdue: pendingAlerts.filter((r) => r.deadline_status === 'OVERDUE').length,
+      });
+
       const endpoint = view === 'Pending' ? '/requests/pending' : '/requests/all';
       const reqRes = await API.get(endpoint);
-      
-      let data = view === 'Pending' ? reqRes.data.requests : reqRes.data.requests.filter(r => r.status === view);
-      
-      if (filterCategory !== "All") {
-        data = data.filter(r => r.category === filterCategory);
+      let data = reqRes.data.requests || [];
+
+      if (view === 'Approved') {
+        data = data.filter((r) => normalizeStatus(r.status) === 'FULLY_APPROVED' || normalizeStatus(r.status) === 'APPROVED');
+      } else if (view !== 'Pending') {
+        data = data.filter((r) => normalizeStatus(r.status) === normalizeStatus(view));
       }
-      
-      setRequests(data || []);
-    } catch (err) { console.error(err); }
+      if (category !== 'All') data = data.filter((r) => (r.category || '') === category);
+      setRequests(data);
+    } catch (err) {
+      setToast({ message: 'Failed to load manager data', type: 'error' });
+    }
   };
 
-  useEffect(() => { loadData(); }, [view, filterCategory]);
+  useEffect(() => {
+    loadData();
+  }, [view, category]);
+
+  const filtered = useMemo(() => {
+    const query = searchTerm.toLowerCase();
+    return requests.filter(
+      (req) => (req.title || '').toLowerCase().includes(query) || String(req.createdBy || '').includes(query)
+    );
+  }, [requests, searchTerm]);
+
+  const isOverdue = (req) => normalizeStatus(req.status) === 'PENDING' && req.dueDate && new Date(req.dueDate) < new Date();
+
+  const handleAction = async (requestId, action) => {
+    if (!comment.trim()) {
+      setToast({ message: 'Comment is required for approval/rejection', type: 'error' });
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      await API.put(`/requests/${requestId}/${action}`, { comment: comment.trim() });
+      setSelected(null);
+      setSelectedFlow(null);
+      setComment('');
+      setToast({ message: action === 'approve' ? 'Request Accepted' : 'Request Rejected', type: 'success' });
+      loadData();
+    } catch (err) {
+      setToast({ message: err.response?.data?.message || 'Action failed', type: 'error' });
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleCommentOnly = async (requestId) => {
+    if (!comment.trim()) {
+      setToast({ message: 'Comment is required', type: 'error' });
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      await API.post(`/requests/${requestId}/comment`, { comment: comment.trim() });
+      setToast({ message: 'Comment sent to employee', type: 'success' });
+      setComment('');
+      setSelected(null);
+      setSelectedFlow(null);
+      loadData();
+    } catch (err) {
+      setToast({ message: err.response?.data?.message || 'Failed to add comment', type: 'error' });
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   const exportToCSV = () => {
-    if (requests.length === 0) return alert("No data to export");
-    const headers = "ID,Sender ID,Title,Category,Status,Due Date,Date Created\n";
-    const rows = requests.map(req => 
-      `${req.id},${req.createdBy},"${req.title}","${req.category || 'General'}",${req.status},${req.dueDate},${req.dateCreated}`
-    ).join("\n");
+    if (filtered.length === 0) {
+      setToast({ message: 'No data to export', type: 'error' });
+      return;
+    }
+
+    const headers = 'ID,Employee ID,Title,Category,Status,Due Date,Processed Date\n';
+    const rows = filtered
+      .map(
+        (req) =>
+          `${req.id},${req.createdBy},"${req.title}","${req.category || ''}",${req.status},${req.dueDate || ''},${req.actionDate || ''}`
+      )
+      .join('\n');
+
     const blob = new Blob([headers + rows], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `SmartCR_${view}_Report.csv`;
+    a.download = `manager_${view.toLowerCase()}_requests.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
 
-  const filteredRequests = requests.filter(req => 
-    req.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    req.createdBy.toString().includes(searchTerm)
-  );
-
-  const getRowStyle = (dueDate, status) => {
-    if (status !== 'Pending') return styles.tr;
-    const today = new Date();
-    const due = new Date(dueDate);
-    const diffDays = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
-    if (diffDays < 0) return { ...styles.tr, borderLeft: '6px solid #ef4444', background: '#fff1f2' }; 
-    if (diffDays <= 2) return { ...styles.tr, borderLeft: '6px solid #f59e0b', background: '#fffbeb' }; 
-    return styles.tr;
-  };
-
-  const handleAction = async (id, action) => {
-    try {
-      await API.put(`/requests/${id}/${action}`, { comment });
-      setSelected(null);
-      setComment("");
-      loadData();
-    } catch (err) { alert("Action failed"); }
-  };
-
   return (
-    <div style={styles.layout}>
-      <div style={styles.sidebar}>
-        <div style={styles.logoBox}>Smart Change Request Portal</div>
-        <nav style={{ flex: 1 }}>
-          <div style={view === 'Pending' ? styles.navActive : styles.navItem} onClick={() => setView('Pending')}>⏳ Pending Queue</div>
-          <div style={view === 'Approved' ? styles.navActive : styles.navItem} onClick={() => setView('Approved')}>✅ Approved History</div>
-          <div style={view === 'Rejected' ? styles.navActive : styles.navItem} onClick={() => setView('Rejected')}>❌ Rejected Archive</div>
-        </nav>
-        <div style={styles.sidebarFooter}>V 1.2.0 • Management Portal</div>
-      </div>
-
-      <div style={styles.main}>
-        <div style={styles.topHeader}>
-          <div>
-            <h1 style={styles.welcomeText}>Review Center</h1>
-            <p style={styles.subtext}>Managing <b>{view}</b> governance requests.</p>
-          </div>
-          <div style={styles.avatarCircle} onClick={() => setShowProfile(!showProfile)}>
-            {name[0].toUpperCase()}
-          </div>
+    <>
+      <AppShell
+        title={`${roleLabel} Dashboard`}
+        subtitle="Review, approve, and monitor change requests"
+        navItems={[
+          { key: 'pending', label: 'Pending', active: view === 'Pending', onClick: () => setView('Pending') },
+          { key: 'approved', label: 'Approved', active: view === 'Approved', onClick: () => setView('Approved') },
+          { key: 'rejected', label: 'Rejected', active: view === 'Rejected', onClick: () => setView('Rejected') },
+          { key: 'profile', label: 'Profile', active: false, onClick: () => navigate('/profile') },
+        ]}
+      >
+        <div className="grid-3">
+          <StatCard label="Pending" value={stats.pending} />
+          <StatCard label="Due Today" value={deadlineStats.dueToday} />
+          <StatCard label="Overdue" value={deadlineStats.overdue} />
+          <StatCard label="Approved" value={stats.approved} />
+          <StatCard label="Rejected" value={stats.rejected} />
         </div>
 
-        <div style={styles.statsGrid}>
-          <div style={{ ...styles.card, borderTop: '4px solid orange', background: '#fff7ed' }}><p style={styles.cardLabel}>Awaiting Review</p><h2 style={styles.cardVal}>{stats.pending}</h2></div>
-          <div style={{ ...styles.card, borderTop: '4px solid #22c55e', background: '#f0fdf4' }}><p style={styles.cardLabel}>Approved Total</p><h2 style={styles.cardVal}>{stats.approved}</h2></div>
-          <div style={{ ...styles.card, borderTop: '4px solid #ef4444', background: '#fef2f2' }}><p style={styles.cardLabel}>Rejected Archive</p><h2 style={styles.cardVal}>{stats.rejected}</h2></div>
-        </div>
-
-        <header style={{ marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-          <div style={{ display: 'flex', gap: '15px', alignItems: 'flex-end', width: '100%' }}>
-            <div style={{ textAlign: 'left', flex: 2 }}>
-               <label style={styles.filterLabel}>Search Requests</label>
-               <input type="text" placeholder="Search title or ID..." style={styles.searchInput} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            </div>
-            <div style={{ textAlign: 'right', flex: 1 }}>
-              <label style={styles.filterLabel}>Filter Category</label>
-              <select style={styles.filterDropdown} value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-                <option value="All">All Categories</option>
-                <option value="UI Change">UI Change</option>
-                <option value="Backend Update">Backend Update</option>
-                <option value="Security Patch">Security Patch</option>
-                <option value="Database Migration">Database Migration</option>
-                <option value="Personal">Personal</option>
-                <option value="Others">Others</option>
-              </select>
-            </div>
+        <section className="card section-card">
+          <div className="section-header">
+            <h3 className="section-title">{view} Requests</h3>
+            <button className="btn btn-secondary" type="button" onClick={exportToCSV}>Export CSV</button>
           </div>
-        </header>
 
-        <div style={styles.tableCard}>
-          <table style={styles.table}>
-            <thead style={styles.thead}>
-              <tr>
-                <th style={styles.th}>SENDER ID</th>
-                <th style={styles.th}>TITLE</th>
-                <th style={styles.th}>CATEGORY</th>
-                <th style={styles.th}>{view === 'Pending' ? 'DUE DATE' : 'PROCESSED ON'}</th>
-                <th style={styles.th}>ACTION</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRequests.length > 0 ? (
-                filteredRequests.map(req => (
-                  <tr key={req.id} style={getRowStyle(req.dueDate, req.status)}>
-                    <td style={styles.td}><strong>{req.createdBy}</strong></td>
-                    <td style={styles.td}>{req.title} {view === 'Pending' && new Date(req.dueDate) < new Date() && <span style={styles.overdueBadge}>OVERDUE</span>}</td>
-                    <td style={styles.td}>
-                      <span style={{ ...styles.categoryTag, background: req.category === 'Personal' ? '#f3e8ff' : '#e2e8f0', color: req.category === 'Personal' ? '#7e22ce' : '#475569' }}>
-                        {req.category || 'General'}
-                      </span>
-                    </td>
-                    <td style={styles.td}>{view === 'Pending' ? req.dueDate : new Date(req.actionDate).toLocaleDateString()}</td>
-                    <td style={styles.td}><button onClick={() => setSelected(req)} style={styles.processBtn}>{view === 'Pending' ? 'Review' : 'View Info'}</button></td>
+          <div className="controls-row">
+            <input className="input" style={{ maxWidth: 240 }} placeholder="Search by title or user" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            <select className="select" style={{ maxWidth: 220 }} value={category} onChange={(e) => setCategory(e.target.value)}>
+              <option value="All">All categories</option>
+              <option value="Infrastructure">Infrastructure</option>
+              <option value="Application">Application</option>
+              <option value="Database">Database</option>
+              <option value="Security">Security</option>
+              <option value="Process">Process</option>
+              <option value="Other">Other</option>
+              <option value="UI Change">UI Change</option>
+              <option value="Backend Update">Backend Update</option>
+              <option value="Security Patch">Security Patch</option>
+              <option value="Database Migration">Database Migration</option>
+              <option value="Personal">Personal</option>
+              <option value="Others">Others</option>
+            </select>
+          </div>
+
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Title</th>
+                  <th>Category</th>
+                  <th>Status</th>
+                  <th>Due Date</th>
+                  <th>Deadline</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan="7" style={{ textAlign: 'center', color: '#64748b' }}>No matching requests</td>
                   </tr>
-                ))
-              ) : (
-                <tr><td colSpan="5" style={{ padding: '40px', textAlign: 'center', color: '#94a3b8' }}>No results found.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div style={styles.bottomActionArea}><button onClick={exportToCSV} style={styles.exportBtn}>📥 Export {view} History to CSV</button></div>
-      </div>
-
-      {/* --- UPDATED PROFILE DRAWER --- */}
-      {showProfile && (
-        <div style={styles.profileDrawerOverlay} onClick={() => setShowProfile(false)}>
-          <div style={styles.profileDrawer} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.drawerHeader}><h3 style={{fontSize: '20px'}}>Manager Profile</h3><button onClick={() => setShowProfile(false)} style={styles.closeBtnX}>✕</button></div>
-            <div style={styles.drawerBody}>
-              <div style={styles.largeAvatar}>{name[0].toUpperCase()}</div>
-              <h2 style={{ textAlign: 'center', fontSize: '24px', margin: '10px 0' }}>{name}</h2>
-              <p style={{ textAlign: 'center', color: '#64748b', marginBottom: '30px', fontWeight: 'bold' }}>{role}</p>
-              <div style={styles.infoRow}><strong>Full Name</strong> <span>{name}</span></div>
-              <div style={styles.infoRow}><strong>Email Address</strong> <span>{email}</span></div>
-              <div style={styles.infoRow}><strong>Manager ID</strong> <span>{rollNo}</span></div>
-              <div style={styles.infoRow}><strong>Department</strong> <span>AIML</span></div>
-              <button onClick={() => { localStorage.clear(); window.location.href='/'; }} style={styles.logoutBtnFull}>Secure Logout</button>
-            </div>
+                ) : (
+                  filtered.map((req) => (
+                    <tr key={req.id} className={isOverdue(req) ? 'overdue' : ''}>
+                      <td>{req.createdBy}</td>
+                      <td>{req.title}</td>
+                      <td>{req.category || '-'}</td>
+                      <td>{isOverdue(req) ? <StatusBadge status={req.status} overdue /> : <StatusBadge status={req.status} />}</td>
+                      <td>{req.due_date || req.dueDate || '-'}</td>
+                      <td><DeadlineBadge status={req.deadline_status} /></td>
+                      <td>
+                        <button className="btn btn-secondary" type="button" onClick={() => setSelected(req)}>
+                          {view === 'Pending' ? 'Review' : 'View'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
-        </div>
-      )}
+        </section>
+      </AppShell>
 
       {selected && (
-        <div style={styles.overlay}>
-          <div style={styles.modal}>
-            <h3 style={{marginTop: 0, fontSize: '22px'}}>Review Request</h3>
-            <div style={styles.timelineContainer}>
-              <div style={styles.timelineStep}><div style={styles.circleActive}>1</div><p style={{fontSize: '11px', fontWeight: 'bold'}}>Submitted</p></div>
-              <div style={{...styles.line, background: selected.status !== 'Pending' ? '#3b82f6' : '#e2e8f0'}} />
-              <div style={styles.timelineStep}><div style={selected.status !== 'Pending' ? styles.circleActive : styles.circleInactive}>2</div><p style={{fontSize: '11px', fontWeight: 'bold'}}>Decision</p></div>
-            </div>
-            <div style={styles.infoBox}>
-              <p><strong>Employee ID:</strong> {selected.createdBy}</p>
-              <p><strong>Impact Area:</strong> {selected.category || 'General'}</p>
-              <p><strong>Description:</strong> {selected.description}</p>
-              {selected.attachment && <p><strong>Attachment:</strong> <a href={selected.attachment} target="_blank" rel="noreferrer" style={{color: '#3b82f6', textDecoration: 'underline'}}>View File</a></p>}
-            </div>
-            {view === 'Pending' ? (
-               <>
-                <textarea placeholder="Provide technical feedback or reasoning..." style={styles.textarea} value={comment} onChange={(e) => setComment(e.target.value)} />
-                <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-                  <button onClick={() => handleAction(selected.id, 'approve')} style={styles.approveBtn}>APPROVE</button>
-                  <button onClick={() => handleAction(selected.id, 'reject')} style={styles.rejectBtn}>REJECT</button>
-                  <button onClick={() => setSelected(null)} style={styles.closeBtn}>Cancel</button>
+        <div className="modal-backdrop" onClick={() => { setSelected(null); setSelectedFlow(null); }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Request Review</h3>
+            <p><strong>Employee ID:</strong> {selected.createdBy}</p>
+            <p><strong>Title:</strong> {selected.title}</p>
+            <p><strong>Category:</strong> {selected.category || '-'}</p>
+            <p><strong>Description:</strong> {selected.description}</p>
+            <p><strong>Attachment:</strong> {selected.attachment || 'None'}</p>
+            <ApprovalFlowTimeline requestId={selected.id} onFlowLoaded={setSelectedFlow} />
+            <RequestTimeline requestId={selected.id} />
+
+            {view === 'Pending' && selectedFlow?.canAct ? (
+              <>
+                <div className="field">
+                  <label>Approval Comment *</label>
+                  <textarea className="textarea" rows={4} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add mandatory review comment" />
                 </div>
-               </>
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <button className="btn btn-secondary" type="button" disabled={processing} onClick={() => handleCommentOnly(selected.id)}>Comment</button>
+                  <button className="btn btn-danger" type="button" disabled={processing} onClick={() => handleAction(selected.id, 'reject')}>Reject</button>
+                  <button className="btn btn-success" type="button" disabled={processing} onClick={() => handleAction(selected.id, 'approve')}>Approve</button>
+                </div>
+              </>
             ) : (
-              <div style={styles.historyBox}>
-                <p><strong>Manager Decision Log:</strong></p>
-                <p style={{ fontStyle: 'italic', color: '#475569', background: '#f1f5f9', padding: '15px', borderRadius: '10px' }}>{selected.comment || "No comment provided."}</p>
-                <button onClick={() => setSelected(null)} style={styles.closeBtn}>Close</button>
-              </div>
+              <>
+                {!selectedFlow?.canAct && (
+                  <p className="hint" style={{ marginTop: 8 }}>
+                    Current level approver role: <strong>{selectedFlow?.currentLevel?.roleName || 'N/A'}</strong>. You are logged in as <strong>{roleLabel}</strong>.
+                  </p>
+                )}
+                <p><strong>Decision Comment:</strong> {selected.comment || 'No comment provided'}</p>
+              </>
             )}
+            <div style={{ marginTop: 10 }}>
+              <button className="btn btn-secondary" type="button" onClick={() => { setSelected(null); setSelectedFlow(null); }}>Close</button>
+            </div>
           </div>
         </div>
       )}
-    </div>
+
+      <ToastMessage message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'success' })} />
+    </>
   );
 }
-
-// ... styles remain same as previously established
-
-const styles = {
-  // 1. DYNAMIC CYBER BACKGROUND (Futuristic Radial Gradient with Texture)
-  layout: { 
-    display: 'flex', 
-    minHeight: '100vh', 
-    background: 'radial-gradient(circle at top left, #2d1b33 0%, #0f172a 40%, #020617 100%)',
-    fontFamily: '"Inter", sans-serif', 
-    fontSize: '16px',
-    color: '#f8fafc' 
-  },
-
-  // 2. FLOATING SIDEBAR: High-End "Pod" Design (Unique Feature)
-  sidebar: { 
-    width: '280px', 
-    background: 'rgba(15, 23, 42, 0.8)', 
-    backdropFilter: 'blur(20px)', // Ultra-heavy blur for "Superb" look
-    color: 'white', 
-    padding: '40px 20px', 
-    position: 'fixed', 
-    height: '94vh', // Doesn't touch the bottom for a floating effect
-    margin: '3vh 20px', 
-    borderRadius: '30px', 
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
-    display: 'flex', 
-    flexDirection: 'column', 
-    boxSizing: 'border-box',
-    zIndex: 10
-  },
-  logoBox: { fontSize: '22px', fontWeight: '800', color: '#3b82f6', marginBottom: '60px', lineHeight: '1.2', letterSpacing: '-0.5px' },
-  navActive: { 
-    padding: '14px', 
-    background: 'rgba(59, 130, 246, 0.2)', 
-    borderLeft: '4px solid #3b82f6', 
-    borderRadius: '12px', 
-    color: '#3b82f6', 
-    fontWeight: 'bold', 
-    marginBottom: '10px' 
-  },
-  // INTERACTIVE NAV: Slides on Hover
-  navItem: { 
-    padding: '14px', 
-    color: '#94a3b8', 
-    marginBottom: '10px', 
-    cursor: 'pointer', 
-    borderRadius: '12px', 
-    transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    // Logic: In your code, add onMouseEnter to trigger transform: 'translateX(10px)'
-  },
-  sidebarFooter: { marginTop: 'auto', fontSize: '12px', color: '#475569', textAlign: 'center' },
-
-  // 3. MAIN AREA: Spacious with Carbon Fibre Texture
-  main: { 
-    marginLeft: '320px', 
-    flex: 1, 
-    padding: '40px 60px',
-    backgroundImage: 'url("https://www.transparenttextures.com/patterns/carbon-fibre.png")', // Stylish texture
-  },
-  topHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px' },
-  welcomeText: { fontSize: '32px', fontWeight: '800', color: '#f8fafc', margin: 0 },
-  subtext: { color: '#94a3b8', fontSize: '16px', marginTop: '4px' },
-  
-  // 4. EMERGING AVATAR: Scalable on Hover
-  avatarCircle: { 
-    width: '55px', 
-    height: '55px', 
-    borderRadius: '16px', 
-    background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)', 
-    color: 'white', 
-    display: 'flex', 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    fontWeight: 'bold', 
-    cursor: 'pointer', 
-    fontSize: '18px',
-    boxShadow: '0 0 20px rgba(139, 92, 246, 0.4)', 
-    transition: 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
-  },
-
-  // 5. KPI SCORECARDS: Fixed Visibility + Emerging Logic
-  statsGrid: { display: 'flex', gap: '25px', marginBottom: '40px' },
-  card: { 
-    flex: 1, 
-    padding: '25px', 
-    borderRadius: '24px', 
-    background: '#ffffff', // High contrast for numbers
-    boxShadow: '0 4px 15px rgba(0,0,0,0.3)',
-    transition: 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)', // Smooth pop-out
-    cursor: 'pointer',
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-  },
-  cardLabel: { margin: 0, fontSize: '14px', fontWeight: '600', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.5px' },
-  cardVal: { 
-    margin: '10px 0 0', 
-    fontSize: '36px', 
-    fontWeight: '800', 
-    color: '#0f172a' // Visible deep slate
-  },
-
-  // 6. GLASSMORPHIC TABLE AREA: Cyber Frost + Lift Logic
-  tableCard: { 
-    background: 'rgba(255, 255, 255, 0.95)', 
-    backdropFilter: 'blur(16px) saturate(180%)', 
-    borderRadius: '28px', 
-    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)', 
-    border: '1px solid rgba(255, 255, 255, 0.1)',
-    overflow: 'hidden' 
-  },
-  table: { width: '100%', borderCollapse: 'collapse' },
-  thead: { textAlign: 'left', color: '#0f172a', fontSize: '14px', background: '#f8fafc', fontWeight: '800' },
-  th: { padding: '20px 30px' },
-  // INTERACTIVE ROW: lifts with transform: 'scale(1.01)'
-  tr: { 
-    borderBottom: '1px solid #f1f5f9', 
-    transition: 'all 0.2s ease', 
-    position: 'relative'
-  },
-  td: { 
-    padding: '20px 30px', 
-    fontSize: '16px', 
-    color: '#0f172a', // Fixed visibility
-    fontWeight: '500'
-  },
-  processBtn: { 
-    background: '#0f172a', 
-    color: 'white', 
-    border: 'none', 
-    padding: '10px 18px', 
-    borderRadius: '10px', 
-    cursor: 'pointer', 
-    fontWeight: 'bold', 
-    fontSize: '14px',
-    boxShadow: '0 4px 10px rgba(59, 130, 246, 0.3)',
-    transition: 'all 0.3s ease',
-    // Hover: scale(1.1)
-  },
-
-  // 7. INPUTS & FILTERS (Dark Mode Theme)
-  filterLabel: { fontSize: '13px', fontWeight: 'bold', color: '#94a3b8', display: 'block', marginBottom: '5px' },
-  filterDropdown: { width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', fontSize: '16px', background: '#0f172a', color: 'white', cursor: 'pointer' },
-  searchInput: { width: '100%', padding: '12px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', fontSize: '16px', background: '#0f172a', color: 'white', outline: 'none', boxSizing: 'border-box' },
-
-  bottomActionArea: { display: 'flex', justifyContent: 'center', padding: '40px 0', marginTop: '20px' },
-  exportBtn: { 
-    background: '#0f172a', 
-    color: 'white', 
-    border: 'none', 
-    padding: '16px 32px', 
-    borderRadius: '16px', 
-    cursor: 'pointer', 
-    fontSize: '16px', 
-    fontWeight: 'bold', 
-    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.3)',
-    transition: 'transform 0.2s ease'
-  },
-
-  // 8. DECISION MODALS: Professional High Contrast
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(2, 6, 23, 0.85)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-  modal: { background: '#ffffff', padding: '45px', borderRadius: '32px', width: '550px', border: '1px solid rgba(255,255,255,0.1)', color: '#0f172a', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)' },
-  infoBox: { background: '#f8fafc', padding: '25px', borderRadius: '20px', marginBottom: '20px', fontSize: '16px', lineHeight: '1.6', color: '#1e293b' },
-  textarea: { width: '100%', height: '100px', padding: '15px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#ffffff', color: '#0f172a', fontSize: '16px' },
-  approveBtn: { flex: 1, background: '#22c55e', color: 'white', border: 'none', padding: '15px', borderRadius: '12px', fontWeight: 'bold', cursor: 'pointer' },
-  rejectBtn: { flex: 1, background: '#ef4444', color: 'white', border: 'none', padding: '15px', borderRadius: '12px', fontWeight: 'bold', cursor: 'pointer' },
-  closeBtn: { width: '100%', marginTop: '10px', background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontWeight: 'bold' },
-  closeBtnX: { background: 'none', border: 'none', fontSize: '24px', color: '#94a3b8', cursor: 'pointer' },
-
-  // 9. PROFILE DRAWER: Crystal White Design
-  profileDrawerOverlay: { position: 'fixed', inset: 0, background: 'rgba(2, 6, 23, 0.6)', backdropFilter: 'blur(4px)', zIndex: 2000, display: 'flex', justifyContent: 'flex-end' },
-  profileDrawer: { width: '400px', background: '#ffffff', color: '#0f172a', height: '100vh', padding: '40px', boxSizing: 'border-box', boxShadow: '-10px 0 30px rgba(0,0,0,0.3)' },
-  drawerHeader: { display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: '15px', marginBottom: '30px' },
-  largeAvatar: { 
-    width: '100px', 
-    height: '100px', 
-    borderRadius: '24px', 
-    background: 'linear-gradient(45deg, #3b82f6, #8b5cf6)', 
-    color: 'white', 
-    fontSize: '40px', 
-    fontWeight: 'bold', 
-    display: 'flex', 
-    alignItems: 'center', 
-    justifyContent: 'center', 
-    margin: '0 auto 20px',
-    boxShadow: '0 0 25px rgba(59, 130, 246, 0.4)' 
-  },
-  infoRow: { display: 'flex', justifyContent: 'space-between', padding: '15px 0', borderBottom: '1px solid #f8fafc', fontSize: '16px', color: '#1e293b' },
-  logoutBtnFull: { width: '100%', marginTop: '40px', background: '#ef4444', color: 'white', border: 'none', padding: '14px', borderRadius: '12px', cursor: 'pointer', fontWeight: 'bold' },
-
-  // 10. GOVERNANCE & UNIQUE AIML ELEMENTS
-  overdueBadge: { background: '#ef4444', color: 'white', fontSize: '11px', padding: '3px 8px', borderRadius: '4px', marginLeft: '12px', fontWeight: 'bold', boxShadow: '0 0 10px rgba(239, 68, 68, 0.4)' },
-  categoryTag: { fontSize: '13px', padding: '5px 12px', borderRadius: '8px', fontWeight: 'bold', display: 'inline-block' },
-  timelineContainer: { display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '20px 0' },
-  circleActive: { width: '30px', height: '30px', borderRadius: '50%', background: '#3b82f6', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px', fontWeight: 'bold', boxShadow: '0 0 10px rgba(59, 130, 246, 0.5)' },
-  circleInactive: { width: '30px', height: '30px', borderRadius: '50%', background: '#e2e8f0', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 5px' },
-  line: { flex: 1, height: '3px', margin: '0 10px', marginBottom: '20px' },
-
-  // NEW UNIQUE FEATURES
-  riskIndicator: {
-    width: '8px',
-    height: '8px',
-    borderRadius: '50%',
-    display: 'inline-block',
-    marginRight: '8px',
-    boxShadow: '0 0 10px currentcolor', 
-  },
-  pulse: {
-    width: '12px',
-    height: '12px',
-    background: '#22c55e',
-    borderRadius: '50%',
-    display: 'inline-block',
-    marginRight: '10px',
-    // You'll add keyframes for this in your global CSS
-  },
-};

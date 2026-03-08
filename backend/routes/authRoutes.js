@@ -1,111 +1,100 @@
 const express = require('express');
-const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
+const authMiddleware = require('../middleware/authMiddleware');
+const { ROLE_KEYS, normalizeRole, toDisplayRole } = require('../utils/roles');
 require('dotenv').config();
 
-// --- AUTHENTICATION ROUTES ---
+const router = express.Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
 router.post('/register', async (req, res) => {
   const { name, email, password, role, roll_no } = req.body;
+  const normalizedRole = normalizeRole(role);
+
   if (!name || !email || !password || !role || !roll_no) {
     return res.status(400).json({ message: 'All fields are required' });
   }
+
+  if (![ROLE_KEYS.EMPLOYEE, ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN].includes(normalizedRole)) {
+    return res.status(400).json({ message: 'Invalid role' });
+  }
+
   try {
-    const existingUser = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (existingUser) return res.status(400).json({ message: 'User already exists.' });
+    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists.' });
+    }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     db.prepare('INSERT INTO users (name, email, password, role, roll_no) VALUES (?, ?, ?, ?, ?)')
-      .run(name, email, hashedPassword, role, roll_no);
+      .run(name, email, hashedPassword, normalizedRole, roll_no);
 
-    res.status(201).json({ message: 'Registration successful!' });
+    return res.status(201).json({ message: 'Registration successful!' });
   } catch (err) {
-    res.status(500).json({ message: 'Database error', error: err.message });
+    return res.status(500).json({ message: 'Database error', error: err.message });
   }
 });
 
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
+  }
+
   try {
     const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    console.log('[LOGIN] user found:', { id: user.id, email: user.email, role: user.role });
 
     const valid = await bcrypt.compare(password, user.password);
-    if (!valid) return res.status(401).json({ message: 'Invalid credentials' });
+    console.log('[LOGIN] password match:', valid);
+    if (!valid) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
 
-    const token = jwt.sign({ id: user.id, role: user.role, name: user.name }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    const roleKey = normalizeRole(user.role);
+    if (![ROLE_KEYS.EMPLOYEE, ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN].includes(roleKey)) {
+      return res.status(400).json({ message: 'Invalid Role' });
+    }
+    console.log('[LOGIN] user role:', user.role, 'normalized:', roleKey);
 
-    res.json({ 
-      token, 
-      role: user.role, 
-      name: user.name, 
-      email: user.email, 
-      roll_no: user.roll_no 
-    });
-  } catch (err) {
-    res.status(500).json({ message: 'Login error' });
-  }
-});
-
-// --- REQUEST LOGIC ---
-
-// CREATE REQUEST with Category Validation
-router.post('/requests/create', (req, res) => {
-  const { title, description, priority, dueDate, category, attachment, roll_no } = req.body;
-  
-  // FIX: Ensure category matches frontend dropdown values exactly
-  const validCategories = ["UI Change", "Backend Update", "Security Patch", "Database Migration", "Personal", "Others"];
-  const finalCategory = validCategories.includes(category) ? category : "Others";
-
-  try {
-    const query = `INSERT INTO requests 
-      (title, description, priority, dueDate, category, attachment, status, createdBy, dateCreated) 
-      VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?, ?)`;
-    
-    db.prepare(query).run(
-      title, 
-      description, 
-      priority, 
-      dueDate, 
-      finalCategory, 
-      attachment || '', 
-      roll_no, // Using the roll_no passed from frontend
-      new Date().toISOString()
+    const token = jwt.sign(
+      { id: user.id, role: roleKey },
+      JWT_SECRET,
+      { expiresIn: '1d' }
     );
 
-    res.status(201).json({ message: "Request created successfully" });
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: roleKey,
+      },
+    });
   } catch (err) {
-    res.status(500).json({ message: "Error creating request", error: err.message });
+    return res.status(500).json({ message: 'Login error', error: err.message });
   }
 });
 
-// WITHDRAW REQUEST (Refined Case-Insensitive Logic)
-router.delete('/requests/:id', (req, res) => {
-  const { id } = req.params;
-  
-  try {
-    const request = db.prepare('SELECT status FROM requests WHERE id = ?').get(id);
-
-    if (!request) {
-      return res.status(404).json({ message: "Request not found." });
-    }
-
-    // Standardize to lowercase to prevent string-matching errors
-    const currentStatus = request.status.toLowerCase();
-
-    if (currentStatus === 'pending') {
-      db.prepare('DELETE FROM requests WHERE id = ?').run(id);
-      return res.status(200).json({ message: "Request successfully withdrawn." });
-    } else {
-      return res.status(400).json({ 
-        message: `Cannot withdraw. This request is already ${request.status}.` 
-      });
-    }
-  } catch (err) {
-    return res.status(500).json({ message: "Server error during withdrawal." });
+router.get('/me', authMiddleware, (req, res) => {
+  const user = db
+    .prepare('SELECT id, name, email, role, roll_no FROM users WHERE id = ?')
+    .get(req.user.id);
+  if (!user) {
+    return res.status(404).json({ message: 'User not found' });
   }
+  return res.json({
+    user: {
+      ...user,
+      role: normalizeRole(user.role),
+      role_label: toDisplayRole(user.role),
+    },
+  });
 });
 
 module.exports = router;
