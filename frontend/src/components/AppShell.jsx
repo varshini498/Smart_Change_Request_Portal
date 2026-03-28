@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Menu, X } from 'lucide-react';
+import {
+  BarChart3,
+  ClipboardList,
+  FolderClock,
+  Gauge,
+  History,
+  LayoutDashboard,
+  Menu,
+  UserRound,
+  X,
+} from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ThemeToggle from './ThemeToggle';
 import NotificationBell from './NotificationBell';
@@ -17,12 +27,24 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
     '/teamlead/dashboard',
     '/manager/dashboard',
     '/admin/dashboard',
+    '/analytics',
     '/employee-dashboard',
     '/teamlead-dashboard',
     '/manager-dashboard',
     '/admin-dashboard',
   ]);
   const showThemeToggle = dashboardThemePaths.has(location.pathname);
+  const finalNavItems = navItems.some((item) => item.key === 'analytics')
+    ? navItems
+    : [
+        ...navItems,
+        {
+          key: 'analytics',
+          label: 'Analytics',
+          active: location.pathname === '/analytics',
+          onClick: () => navigate('/analytics'),
+        },
+      ];
 
   const logout = () => {
     localStorage.clear();
@@ -43,7 +65,7 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
       <aside className={`sidebar ${open ? 'open' : ''}`}>
         <div className="brand">SmartCR Portal</div>
         <div className="nav-list">
-          {navItems.map((item) => (
+          {finalNavItems.map((item) => (
             <button
               key={item.key}
               type="button"
@@ -53,6 +75,7 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
                 setOpen(false);
               }}
             >
+              <span className="nav-item-icon">{resolveNavIcon(item.key)}</span>
               {item.label}
             </button>
           ))}
@@ -98,10 +121,21 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
             </div>
           </div>
         </header>
-        <section className="page-content">{children}</section>
+        <section className="page-content fade-in">{children}</section>
       </main>
     </div>
   );
+}
+
+function resolveNavIcon(key) {
+  const value = String(key || '').toLowerCase();
+  if (value.includes('analytics')) return <BarChart3 size={16} />;
+  if (value.includes('history')) return <History size={16} />;
+  if (value.includes('pending')) return <FolderClock size={16} />;
+  if (value.includes('dashboard')) return <LayoutDashboard size={16} />;
+  if (value.includes('profile')) return <UserRound size={16} />;
+  if (value.includes('new')) return <ClipboardList size={16} />;
+  return <Gauge size={16} />;
 }
 
 const styles = {
@@ -116,6 +150,7 @@ const styles = {
     boxShadow: 'var(--shadow)',
     zIndex: 3400,
     overflow: 'hidden',
+    animation: 'slide-down 0.25s ease',
   },
   profileItem: {
     width: '100%',

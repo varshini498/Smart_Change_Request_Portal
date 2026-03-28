@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import AdminLayout from './AdminLayout';
 import { adminService } from '../../services/adminService';
 import ToastMessage from '../../components/ToastMessage';
+import EmptyState from '../../components/EmptyState';
+import { Users } from 'lucide-react';
 
 const ROLE_OPTIONS = ['EMPLOYEE', 'TEAM_LEAD', 'MANAGER', 'ADMIN'];
 
@@ -124,7 +126,13 @@ export default function AdminUsers() {
                 <tbody>
                   {users.length === 0 ? (
                     <tr>
-                      <td colSpan="5" style={{ textAlign: 'center', color: '#64748b' }}>No users found</td>
+                      <td colSpan="5">
+                        <EmptyState
+                          title="No users found"
+                          description="Create the first user account to start assigning roles and managing access."
+                          icon={Users}
+                        />
+                      </td>
                     </tr>
                   ) : (
                     users.map((u) => (

@@ -7,6 +7,8 @@ import DeadlineBadge from '../../components/DeadlineBadge';
 import ToastMessage from '../../components/ToastMessage';
 import RequestTimeline from '../../components/RequestTimeline';
 import ApprovalFlowTimeline from '../../components/ApprovalFlowTimeline';
+import EmptyState from '../../components/EmptyState';
+import { Inbox } from 'lucide-react';
 
 const initialForm = {
   title: '',
@@ -290,7 +292,13 @@ export default function EmployeeDashboard() {
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan="7" style={{ textAlign: 'center', color: '#64748b' }}>No requests found</td>
+                <td colSpan="7">
+                  <EmptyState
+                    title="No requests found"
+                    description="This section will populate as you create drafts, submit requests, or complete approvals."
+                    icon={Inbox}
+                  />
+                </td>
               </tr>
             ) : (
               rows.map((req) => (
@@ -302,21 +310,23 @@ export default function EmployeeDashboard() {
                   <td>{req.due_date || req.dueDate || '-'}</td>
                   <td><DeadlineBadge status={req.deadline_status} /></td>
                   <td>
-                    <button className="btn btn-secondary" type="button" onClick={() => setSelected(req)}>View</button>
-                    <button className="btn btn-secondary" type="button" style={{ marginLeft: 8 }} onClick={() => loadVersions(req.id)}>Versions</button>
+                    <div className="actions-row">
+                      <button className="btn btn-secondary" type="button" onClick={() => setSelected(req)}>View</button>
+                      <button className="btn btn-secondary" type="button" onClick={() => loadVersions(req.id)}>Versions</button>
                     {sectionType === 'draft' && (
                       <>
-                        <button className="btn btn-primary" style={{ marginLeft: 8 }} type="button" onClick={() => openEditForm(req)}>Edit</button>
-                        <button className="btn btn-primary" style={{ marginLeft: 8 }} type="button" onClick={() => handleSubmitDraft(req.id)}>Submit</button>
-                        <button className="btn btn-danger" style={{ marginLeft: 8 }} type="button" onClick={() => handleDeleteDraft(req.id)}>Delete</button>
+                        <button className="btn btn-primary" type="button" onClick={() => openEditForm(req)}>Edit</button>
+                        <button className="btn btn-primary" type="button" onClick={() => handleSubmitDraft(req.id)}>Submit</button>
+                        <button className="btn btn-danger" type="button" onClick={() => handleDeleteDraft(req.id)}>Delete</button>
                       </>
                     )}
                     {sectionType === 'pending' && canEditBeforeApproval(req) && (
-                      <button className="btn btn-primary" style={{ marginLeft: 8 }} type="button" onClick={() => openEditForm(req)}>Edit</button>
+                      <button className="btn btn-primary" type="button" onClick={() => openEditForm(req)}>Edit</button>
                     )}
                     {sectionType === 'pending' && canWithdraw(req) && (
-                      <button className="btn btn-danger" style={{ marginLeft: 8 }} type="button" onClick={() => handleWithdraw(req.id)}>Withdraw</button>
+                      <button className="btn btn-danger" type="button" onClick={() => handleWithdraw(req.id)}>Withdraw</button>
                     )}
+                    </div>
                   </td>
                 </tr>
               ))

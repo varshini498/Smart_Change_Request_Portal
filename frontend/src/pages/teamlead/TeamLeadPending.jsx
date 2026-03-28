@@ -5,6 +5,8 @@ import AppShell from '../../components/AppShell';
 import StatusBadge from '../../components/StatusBadge';
 import ToastMessage from '../../components/ToastMessage';
 import ApprovalFlowTimeline from '../../components/ApprovalFlowTimeline';
+import EmptyState from '../../components/EmptyState';
+import { FolderSearch } from 'lucide-react';
 
 const PRIORITY_OPTIONS = ['All', 'Low', 'Medium', 'High', 'Critical'];
 const PAGE_SIZE = 10;
@@ -171,8 +173,12 @@ export default function TeamLeadPending() {
               <tbody>
                 {pageRows.length === 0 ? (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', color: '#64748b' }}>
-                      No pending requests
+                    <td colSpan="8">
+                      <EmptyState
+                        title="No matching approvals"
+                        description="Try a different search term or priority filter. New approval requests will show up here automatically."
+                        icon={FolderSearch}
+                      />
                     </td>
                   </tr>
                 ) : (
@@ -186,7 +192,7 @@ export default function TeamLeadPending() {
                       <td>{req.dateCreated || req.created_at || '-'}</td>
                       <td><StatusBadge status={req.status} /></td>
                       <td>
-                        <div style={{ display: 'flex', gap: 8 }}>
+                        <div className="actions-row">
                           <button className="btn btn-success" type="button" onClick={() => handleQuickAction(req.id, 'approve')}>
                             Approve
                           </button>
@@ -205,9 +211,9 @@ export default function TeamLeadPending() {
             </table>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
+          <div className="pagination">
             <span className="hint">Page {page} of {totalPages}</span>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div className="actions-row">
               <button className="btn btn-secondary" type="button" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
               <button className="btn btn-secondary" type="button" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
             </div>

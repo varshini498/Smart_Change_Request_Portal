@@ -1,9 +1,11 @@
 import { useNavigate } from 'react-router-dom';
+import { BarChart3, FolderKanban, LayoutDashboard, Logs, Settings, Shapes, Users } from 'lucide-react';
 
 const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', path: '/admin/dashboard' },
   { key: 'users', label: 'Users', path: '/admin/users' },
   { key: 'requests', label: 'Requests', path: '/admin/requests' },
+  { key: 'analytics', label: 'Analytics', path: '/analytics' },
   { key: 'categories', label: 'Categories', path: '/admin/categories' },
   { key: 'audit', label: 'Audit Logs', path: '/admin/audit' },
   { key: 'settings', label: 'Settings', path: '/admin/settings' },
@@ -34,6 +36,7 @@ export default function AdminLayout({ title, activeKey, children }) {
               className={`admin-nav-item ${activeKey === item.key ? 'active' : ''}`}
               onClick={() => navigate(item.path)}
             >
+              <span className="admin-nav-icon">{resolveAdminIcon(item.key)}</span>
               {item.label}
             </button>
           ))}
@@ -51,8 +54,29 @@ export default function AdminLayout({ title, activeKey, children }) {
           </button>
         </header>
 
-        <main>{children}</main>
+        <main className="fade-in">{children}</main>
       </div>
     </div>
   );
+}
+
+function resolveAdminIcon(key) {
+  switch (key) {
+    case 'dashboard':
+      return <LayoutDashboard size={16} />;
+    case 'users':
+      return <Users size={16} />;
+    case 'requests':
+      return <FolderKanban size={16} />;
+    case 'analytics':
+      return <BarChart3 size={16} />;
+    case 'categories':
+      return <Shapes size={16} />;
+    case 'audit':
+      return <Logs size={16} />;
+    case 'settings':
+      return <Settings size={16} />;
+    default:
+      return <LayoutDashboard size={16} />;
+  }
 }

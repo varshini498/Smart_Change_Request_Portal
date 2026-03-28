@@ -6,6 +6,8 @@ import StatCard from '../../components/StatCard';
 import StatusBadge from '../../components/StatusBadge';
 import DeadlineBadge from '../../components/DeadlineBadge';
 import ToastMessage from '../../components/ToastMessage';
+import EmptyState from '../../components/EmptyState';
+import { FolderSearch } from 'lucide-react';
 
 export default function TeamLeadDashboard() {
   const navigate = useNavigate();
@@ -84,8 +86,12 @@ export default function TeamLeadDashboard() {
               <tbody>
                 {recentPending.length === 0 ? (
                   <tr>
-                    <td colSpan="9" style={{ textAlign: 'center', color: '#64748b' }}>
-                      No pending requests
+                    <td colSpan="9">
+                      <EmptyState
+                        title="No pending requests"
+                        description="Level 1 approvals assigned to you will appear here as soon as employees submit them."
+                        icon={FolderSearch}
+                      />
                     </td>
                   </tr>
                 ) : (

@@ -5,18 +5,26 @@ const { ROLE_KEYS, hasRole } = require('../utils/roles');
 
 const router = express.Router();
 
-const managerOrAdmin = (req, res, next) => {
-  if (!hasRole(req.user.role, [ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN])) {
-    return res.status(403).json({ message: 'Forbidden' });
+const canViewOverview = (req, res, next) => {
+  if (!hasRole(req.user.role, [ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN])) {
+    return res.status(403).json({ success: false, message: 'Forbidden' });
   }
   return next();
 };
 
-router.get('/overview', authMiddleware, managerOrAdmin, analyticsController.getOverview);
-router.get('/department-stats', authMiddleware, managerOrAdmin, analyticsController.getDepartmentStats);
-router.get('/approval-time', authMiddleware, managerOrAdmin, analyticsController.getApprovalTime);
-router.get('/overdue-trends', authMiddleware, managerOrAdmin, analyticsController.getOverdueTrends);
-router.get('/export/pdf', authMiddleware, managerOrAdmin, analyticsController.exportPdf);
-router.get('/export/excel', authMiddleware, managerOrAdmin, analyticsController.exportExcel);
+const employeeOnly = (req, res, next) => {
+  if (!hasRole(req.user.role, ROLE_KEYS.EMPLOYEE)) {
+    return res.status(403).json({ success: false, message: 'Forbidden' });
+  }
+  return next();
+};
+
+router.get('/employee', authMiddleware, employeeOnly, analyticsController.getEmployee);
+router.get('/overview', authMiddleware, canViewOverview, analyticsController.getOverview);
+router.get('/department-stats', authMiddleware, canViewOverview, analyticsController.getDepartmentStats);
+router.get('/approval-time', authMiddleware, canViewOverview, analyticsController.getApprovalTime);
+router.get('/overdue-trends', authMiddleware, canViewOverview, analyticsController.getOverdueTrends);
+router.get('/export/pdf', authMiddleware, canViewOverview, analyticsController.exportPdf);
+router.get('/export/excel', authMiddleware, canViewOverview, analyticsController.exportExcel);
 
 module.exports = router;

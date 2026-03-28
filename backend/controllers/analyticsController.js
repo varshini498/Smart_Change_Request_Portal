@@ -3,75 +3,94 @@ const XLSX = require('xlsx');
 const analyticsService = require('../services/analyticsService');
 
 const getFilters = (req) => {
-  const { from, to, department } = req.query;
-  return { from, to, department };
+  const { from, to, category } = req.query;
+  return {
+    role: req.user.role,
+    userId: req.user.id,
+    from,
+    to,
+    category,
+  };
+};
+
+const getEmployee = (req, res) => {
+  const payload = analyticsService.getEmployeeAnalytics(getFilters(req));
+  payload.categoryData = payload.byCategory;
+  return res.json({ success: true, data: payload });
 };
 
 const getOverview = (req, res) => {
   const filters = getFilters(req);
-  const overview = analyticsService.getOverview(filters);
-  const status = analyticsService.getStatusBreakdown(filters);
-  return res.json({ overview, status });
+  const payload = analyticsService.getOverview(filters);
+  payload.categoryData = payload.byCategory;
+  return res.json({
+    success: true,
+    data: payload,
+    overview: payload,
+    status: payload.statusBreakdown,
+  });
 };
 
 const getDepartmentStats = (req, res) => {
-  const stats = analyticsService.getDepartmentStats(getFilters(req));
-  return res.json({ departmentStats: stats });
+  const filter = analyticsService.buildFilters(getFilters(req));
+  const stats = analyticsService.getDepartmentStats(filter);
+  return res.json({ success: true, data: stats, departmentStats: stats });
 };
 
 const getApprovalTime = (req, res) => {
-  const approvalTime = analyticsService.getApprovalTime(getFilters(req));
-  return res.json({ approvalTime });
+  const filter = analyticsService.buildFilters(getFilters(req));
+  const approvalTime = analyticsService.getApprovalTime(filter);
+  return res.json({ success: true, data: approvalTime, approvalTime });
 };
 
 const getOverdueTrends = (req, res) => {
-  const trends = analyticsService.getOverdueTrends(getFilters(req));
-  return res.json({ overdueTrends: trends });
+  const filter = analyticsService.buildFilters(getFilters(req));
+  const trends = analyticsService.getOverdueTrends(filter);
+  return res.json({ success: true, data: trends, overdueTrends: trends });
 };
 
 const exportExcel = (req, res) => {
   const filters = getFilters(req);
   const overview = analyticsService.getOverview(filters);
-  const status = analyticsService.getStatusBreakdown(filters);
-  const departments = analyticsService.getDepartmentStats(filters);
-  const overdue = analyticsService.getOverdueTrends(filters);
-  const approval = analyticsService.getApprovalTime(filters);
+  const departmentStats = analyticsService.getDepartmentStats(analyticsService.buildFilters(filters));
+  const overdueTrends = analyticsService.getOverdueTrends(analyticsService.buildFilters(filters));
+  const approvalTime = analyticsService.getApprovalTime(analyticsService.buildFilters(filters));
 
   const workbook = XLSX.utils.book_new();
 
-  const summaryRows = [
-    ['Metric', 'Value'],
-    ['Total Requests', overview.totalRequests || 0],
-    ['Pending', overview.pendingCount || 0],
-    ['Approved', overview.approvedCount || 0],
-    ['Rejected', overview.rejectedCount || 0],
-    ['Overdue', overview.overdueCount || 0],
-    ['Avg Approval Hours', overview.avgApprovalHours || '0.00'],
-  ];
-
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(status), 'Status');
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(overview.priorities || []), 'Priority');
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(departments), 'Departments');
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(overdue), 'Overdue');
-  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(approval.byDepartment || []), 'Approval');
+  XLSX.utils.book_append_sheet(
+    workbook,
+    XLSX.utils.json_to_sheet([
+      {
+        totalRequests: overview.totalRequests,
+        approved: overview.approved,
+        rejected: overview.rejected,
+        pending: overview.pending,
+        draft: overview.draft,
+      },
+    ]),
+    'KPI'
+  );
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(overview.statusBreakdown), 'Status');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(overview.byCategory), 'Category');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(overview.monthlyTrend), 'Monthly');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(departmentStats), 'Departments');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(overdueTrends), 'Overdue');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(approvalTime.byDepartment), 'ApprovalTime');
 
   const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', 'attachment; filename=\"analytics_report.xlsx\"');
+  res.setHeader('Content-Disposition', 'attachment; filename="analytics_report.xlsx"');
   return res.send(buffer);
 };
 
 const exportPdf = (req, res) => {
   const filters = getFilters(req);
   const overview = analyticsService.getOverview(filters);
-  const status = analyticsService.getStatusBreakdown(filters);
-  const departments = analyticsService.getDepartmentStats(filters);
-  const overdue = analyticsService.getOverdueTrends(filters);
-
   const doc = new PDFDocument({ margin: 40, size: 'A4' });
+
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', 'attachment; filename=\"analytics_report.pdf\"');
+  res.setHeader('Content-Disposition', 'attachment; filename="analytics_report.pdf"');
   doc.pipe(res);
 
   doc.fontSize(18).text('Smart Change Request Portal - Analytics Report');
@@ -80,33 +99,29 @@ const exportPdf = (req, res) => {
   doc.moveDown();
 
   doc.fillColor('#0f172a').fontSize(13).text('KPI Summary');
-  doc.fontSize(11).text(`Total Requests: ${overview.totalRequests || 0}`);
-  doc.text(`Pending: ${overview.pendingCount || 0}`);
-  doc.text(`Approved: ${overview.approvedCount || 0}`);
-  doc.text(`Rejected: ${overview.rejectedCount || 0}`);
-  doc.text(`Overdue: ${overview.overdueCount || 0}`);
-  doc.text(`Average Approval Time (Hours): ${overview.avgApprovalHours || '0.00'}`);
+  doc.fontSize(11).text(`Total Requests: ${overview.totalRequests}`);
+  doc.text(`Approved: ${overview.approved}`);
+  doc.text(`Rejected: ${overview.rejected}`);
+  doc.text(`Pending: ${overview.pending}`);
+  doc.text(`Draft: ${overview.draft}`);
   doc.moveDown();
 
-  doc.fontSize(13).text('Status Distribution');
-  status.forEach((row) => doc.fontSize(11).text(`- ${row.status}: ${row.count}`));
-  doc.moveDown();
+  doc.fontSize(13).text('Requests by Status');
+  overview.statusBreakdown.forEach((row) => {
+    doc.fontSize(11).text(`- ${row.status}: ${row.count}`);
+  });
 
-  doc.fontSize(13).text('Requests per Department');
-  departments.forEach((row) => doc.fontSize(11).text(`- ${row.department}: ${row.count}`));
   doc.moveDown();
-
-  doc.fontSize(13).text('Overdue Trend');
-  if (!overdue.length) {
-    doc.fontSize(11).text('No overdue requests in selected filter');
-  } else {
-    overdue.forEach((row) => doc.fontSize(11).text(`- ${row.day}: ${row.count}`));
-  }
+  doc.fontSize(13).text('Requests by Category');
+  overview.byCategory.forEach((row) => {
+    doc.fontSize(11).text(`- ${row.category}: ${row.count}`);
+  });
 
   doc.end();
 };
 
 module.exports = {
+  getEmployee,
   getOverview,
   getDepartmentStats,
   getApprovalTime,

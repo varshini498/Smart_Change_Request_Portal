@@ -8,6 +8,8 @@ import DeadlineBadge from '../../components/DeadlineBadge';
 import ToastMessage from '../../components/ToastMessage';
 import RequestTimeline from '../../components/RequestTimeline';
 import ApprovalFlowTimeline from '../../components/ApprovalFlowTimeline';
+import EmptyState from '../../components/EmptyState';
+import { SearchX } from 'lucide-react';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -192,7 +194,13 @@ export default function Dashboard() {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan="7" style={{ textAlign: 'center', color: '#64748b' }}>No matching requests</td>
+                    <td colSpan="7">
+                      <EmptyState
+                        title="No matching requests"
+                        description="Adjust the search or category filter to find what you need, or wait for more workflow activity."
+                        icon={SearchX}
+                      />
+                    </td>
                   </tr>
                 ) : (
                   filtered.map((req) => (

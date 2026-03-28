@@ -4,6 +4,9 @@ import AdminLayout from './AdminLayout';
 import { adminService } from '../../services/adminService';
 import ToastMessage from '../../components/ToastMessage';
 import DeadlineBadge from '../../components/DeadlineBadge';
+import EmptyState from '../../components/EmptyState';
+import StatusBadge from '../../components/StatusBadge';
+import { FolderSearch } from 'lucide-react';
 
 const STATUS_OPTIONS = ['All', 'Pending', 'Escalated', 'Fully Approved', 'Rejected', 'Withdrawn'];
 const PAGE_SIZE = 10;
@@ -203,7 +206,15 @@ export default function AdminRequests() {
                 {loading ? (
                   <tr><td colSpan="9" style={{ textAlign: 'center' }}>Loading...</td></tr>
                 ) : pageRows.length === 0 ? (
-                  <tr><td colSpan="9" style={{ textAlign: 'center', color: '#64748b' }}>No requests found</td></tr>
+                  <tr>
+                    <td colSpan="9">
+                      <EmptyState
+                        title="No requests found"
+                        description="Try changing the filters, or wait for new workflow activity to appear."
+                        icon={FolderSearch}
+                      />
+                    </td>
+                  </tr>
                 ) : (
                   pageRows.map((req) => (
                     <tr key={req.id}>
@@ -220,28 +231,30 @@ export default function AdminRequests() {
                       <td>{req.id}</td>
                       <td>{req.title}</td>
                       <td>{req.employee_name || '-'}</td>
-                      <td>{req.status}</td>
+                      <td><StatusBadge status={req.status} /></td>
                       <td>{levelLabel(req.current_level)}</td>
                       <td>{req.created_at || '-'}</td>
                       <td><DeadlineBadge status={req.deadline_status} /></td>
                       <td>
-                        <button className="btn btn-secondary" type="button" onClick={() => handleEscalate(req.id)}>
-                          Escalate
-                        </button>
-                        <button className="btn btn-secondary" type="button" onClick={() => setOverride(req)}>
-                          Override
-                        </button>
-                        <button className="btn btn-secondary" type="button" onClick={() => navigate(`/requests/${req.id}`)}>
-                          View
-                        </button>
-                        <button
-                          className="btn btn-danger"
-                          type="button"
-                          disabled={!canDeleteRequest(req)}
-                          onClick={() => handleDelete(req)}
-                        >
-                          Delete
-                        </button>
+                        <div className="actions-row">
+                          <button className="btn btn-secondary" type="button" onClick={() => handleEscalate(req.id)}>
+                            Escalate
+                          </button>
+                          <button className="btn btn-secondary" type="button" onClick={() => setOverride(req)}>
+                            Override
+                          </button>
+                          <button className="btn btn-secondary" type="button" onClick={() => navigate(`/requests/${req.id}`)}>
+                            View
+                          </button>
+                          <button
+                            className="btn btn-danger"
+                            type="button"
+                            disabled={!canDeleteRequest(req)}
+                            onClick={() => handleDelete(req)}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))

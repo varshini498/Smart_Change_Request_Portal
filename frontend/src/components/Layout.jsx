@@ -17,6 +17,7 @@ export default function Layout({ children }) {
           <Link className="nav-item active" to="/manager/dashboard">Dashboard</Link>
           <Link className="nav-item" to="/manager/pending">Pending Requests</Link>
           <Link className="nav-item" to="/manager/all">All Requests</Link>
+          <Link className="nav-item" to="/analytics">Analytics</Link>
           <Link className="nav-item" to="/profile">Profile</Link>
         </div>
         <div className="sidebar-footer">

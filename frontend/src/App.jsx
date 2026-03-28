@@ -174,7 +174,7 @@ function App() {
           <Route
             path="/analytics"
             element={
-              <ProtectedRoute role={[ROLES.ADMIN]} redirectTo="/unauthorized">
+              <ProtectedRoute role={[ROLES.EMPLOYEE, ROLES.TEAM_LEAD, ROLES.MANAGER, ROLES.ADMIN]} redirectTo="/unauthorized">
                 <AnalyticsDashboard />
               </ProtectedRoute>
             }

@@ -1,244 +1,203 @@
 import { useEffect, useMemo, useState } from 'react';
+import { BarChart3, CalendarRange, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Chart as ChartJS,
-  ArcElement,
-  BarElement,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Tooltip,
-  Legend,
-} from 'chart.js';
-import { Bar, Pie, Line } from 'react-chartjs-2';
-import API from '../../api/axios';
 import AppShell from '../../components/AppShell';
-import StatCard from '../../components/StatCard';
+import AdminLayout from '../admin/AdminLayout';
 import ToastMessage from '../../components/ToastMessage';
+import KpiCard from '../../components/analytics/KpiCard';
+import DonutChart from '../../components/analytics/DonutChart';
+import BarChart from '../../components/analytics/BarChart';
+import LineChart from '../../components/analytics/LineChart';
+import analyticsService from '../../services/analyticsService';
+import { ROLES, normalizeRole } from '../../constants/roles';
 
-ChartJS.register(ArcElement, BarElement, CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
+const RANGE_OPTIONS = [
+  { value: '7', label: 'Last 7 days' },
+  { value: '30', label: 'Last 30 days' },
+  { value: '365', label: 'Last 1 year' },
+];
 
-const defaultFilters = { from: '', to: '', department: 'All' };
+const getFromDate = (days) => {
+  const date = new Date();
+  date.setDate(date.getDate() - Number(days));
+  return date.toISOString().split('T')[0];
+};
+
+const buildNavItems = (role, navigate) => {
+  if (role === ROLES.EMPLOYEE) {
+    return [
+      { key: 'dashboard', label: 'My Requests', active: false, onClick: () => navigate('/employee/dashboard') },
+      { key: 'analytics', label: 'Analytics', active: true, onClick: () => navigate('/analytics') },
+    ];
+  }
+
+  if (role === ROLES.TEAM_LEAD) {
+    return [
+      { key: 'dashboard', label: 'Dashboard', active: false, onClick: () => navigate('/teamlead/dashboard') },
+      { key: 'pending', label: 'Pending Approvals', active: false, onClick: () => navigate('/teamlead/pending') },
+      { key: 'history', label: 'Approval History', active: false, onClick: () => navigate('/teamlead/history') },
+      { key: 'analytics', label: 'Analytics', active: true, onClick: () => navigate('/analytics') },
+    ];
+  }
+
+  return [
+    { key: 'pending', label: 'Pending', active: false, onClick: () => navigate('/manager/dashboard') },
+    { key: 'analytics', label: 'Analytics', active: true, onClick: () => navigate('/analytics') },
+    { key: 'profile', label: 'Profile', active: false, onClick: () => navigate('/profile') },
+  ];
+};
+
+function AnalyticsContent({
+  loading,
+  error,
+  analytics,
+  range,
+  setRange,
+  refresh,
+}) {
+  if (loading) {
+    return (
+      <section className="card analytics-hero-card">
+        <div className="analytics-loading-state">
+          <div className="analytics-spinner" />
+          <p>Loading analytics...</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (error) {
+    return (
+      <section className="card analytics-hero-card">
+        <div className="analytics-empty-state">
+          <h3>Analytics could not be loaded</h3>
+          <p>{error}</p>
+          <button className="btn btn-secondary" type="button" onClick={refresh}>Try again</button>
+        </div>
+      </section>
+    );
+  }
+
+  const totalRequests = Number(analytics?.totalRequests || 0);
+  const hasData = totalRequests > 0;
+
+  if (!hasData) {
+    return (
+      <section className="card analytics-hero-card">
+        <div className="analytics-empty-state">
+          <BarChart3 size={28} />
+          <h3>No analytics data yet</h3>
+          <p>Once requests start moving through the workflow, charts and KPI cards will appear here.</p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <section className="card analytics-hero-card">
+        <div className="analytics-hero-copy">
+          <span className="analytics-eyebrow">Insights</span>
+          <h2>Request analytics overview</h2>
+          <p>Track request volume, approval outcomes, and category patterns from one dedicated page.</p>
+        </div>
+        <div className="analytics-toolbar">
+          <label className="analytics-filter">
+            <CalendarRange size={16} />
+            <select className="select" value={range} onChange={(e) => setRange(e.target.value)}>
+              {RANGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <button className="btn btn-secondary" type="button" onClick={refresh}>
+            <RefreshCw size={16} />
+            Refresh
+          </button>
+        </div>
+      </section>
+
+      <section className="analytics-kpi-grid">
+        <KpiCard label="Total Requests" value={analytics.totalRequests || 0} tone="total" />
+        <KpiCard label="Approved" value={analytics.approved || 0} tone="approved" />
+        <KpiCard label="Rejected" value={analytics.rejected || 0} tone="rejected" />
+        <KpiCard label="Pending" value={analytics.pending || 0} tone="pending" />
+      </section>
+
+      <section className="analytics-chart-grid analytics-chart-grid-top">
+        <DonutChart title="Approval Distribution" data={analytics.statusBreakdown || []} total={analytics.totalRequests || 0} />
+        <BarChart title="Monthly Request Trend" data={analytics.monthlyTrend || []} dataKey="count" nameKey="month" color="#2563eb" />
+      </section>
+
+      <section className="analytics-chart-grid">
+        <LineChart title="Request Growth Over Time" data={analytics.monthlyTrend || []} dataKey="count" nameKey="month" color="#7c3aed" />
+        <BarChart title="Requests by Category" data={analytics.categoryData || analytics.byCategory || []} dataKey="count" nameKey="category" color="#0ea5e9" />
+      </section>
+    </>
+  );
+}
 
 export default function AnalyticsDashboard() {
   const navigate = useNavigate();
-  const role = localStorage.getItem('role') || '';
-
-  const [filters, setFilters] = useState(defaultFilters);
-  const [overview, setOverview] = useState(null);
-  const [statusData, setStatusData] = useState([]);
-  const [departmentData, setDepartmentData] = useState([]);
-  const [overdueTrends, setOverdueTrends] = useState([]);
-  const [approvalTime, setApprovalTime] = useState(null);
+  const role = normalizeRole(localStorage.getItem('role') || '');
+  const [range, setRange] = useState('30');
+  const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [error, setError] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'success' });
 
-  const allowed = role === 'ADMIN';
-
-  const queryString = useMemo(() => {
-    const params = new URLSearchParams();
-    if (filters.from) params.append('from', filters.from);
-    if (filters.to) params.append('to', filters.to);
-    if (filters.department && filters.department !== 'All') params.append('department', filters.department);
-    return params.toString();
-  }, [filters]);
+  const params = useMemo(() => ({ from: getFromDate(range) }), [range]);
 
   const fetchAnalytics = async () => {
     try {
       setLoading(true);
-      const suffix = queryString ? `?${queryString}` : '';
-      const [overviewRes, deptRes, approvalRes, overdueRes] = await Promise.all([
-        API.get(`/analytics/overview${suffix}`),
-        API.get(`/analytics/department-stats${suffix}`),
-        API.get(`/analytics/approval-time${suffix}`),
-        API.get(`/analytics/overdue-trends${suffix}`),
-      ]);
+      setError('');
+      const response =
+        role === ROLES.EMPLOYEE
+          ? await analyticsService.getEmployeeAnalytics(params)
+          : await analyticsService.getOverviewAnalytics(params);
 
-      setOverview(overviewRes.data.overview || null);
-      setStatusData(overviewRes.data.status || []);
-      setDepartmentData(deptRes.data.departmentStats || []);
-      setApprovalTime(approvalRes.data.approvalTime || null);
-      setOverdueTrends(overdueRes.data.overdueTrends || []);
+      setAnalytics(response.data?.data || null);
     } catch (err) {
-      setToast({ message: err.response?.data?.message || 'Failed to load analytics', type: 'error' });
+      const message = err.response?.data?.message || 'Failed to load analytics data';
+      setError(message);
+      setToast({ message, type: 'error' });
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!allowed) return;
     fetchAnalytics();
-  }, [queryString, allowed]);
+  }, [range]);
 
-  useEffect(() => {
-    if (!autoRefresh) return undefined;
-    const id = setInterval(fetchAnalytics, 30000);
-    return () => clearInterval(id);
-  }, [autoRefresh, queryString, allowed]);
-
-  const handleExport = async (type) => {
-    try {
-      const suffix = queryString ? `?${queryString}` : '';
-      const res = await API.get(`/analytics/export/${type}${suffix}`, { responseType: 'blob' });
-      const blob = new Blob([res.data], {
-        type:
-          type === 'pdf'
-            ? 'application/pdf'
-            : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = type === 'pdf' ? 'analytics_report.pdf' : 'analytics_report.xlsx';
-      a.click();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      setToast({ message: err.response?.data?.message || `Failed to export ${type}`, type: 'error' });
-    }
-  };
-
-  if (!allowed) {
-    return (
-      <div className="auth-page">
-        <div className="auth-card">
-          <h1 className="auth-title">Access Denied</h1>
-          <p className="auth-subtitle">Analytics is available for Admin role only.</p>
-          <button className="btn btn-secondary" type="button" onClick={() => navigate(-1)}>Go Back</button>
-        </div>
-      </div>
-    );
-  }
-
-  const departmentChartData = {
-    labels: departmentData.map((x) => x.department),
-    datasets: [{ label: 'Requests', data: departmentData.map((x) => x.count), backgroundColor: '#2563eb' }],
-  };
-
-  const statusChartData = {
-    labels: statusData.map((x) => x.status),
-    datasets: [
-      {
-        data: statusData.map((x) => x.count),
-        backgroundColor: ['#f59e0b', '#16a34a', '#dc2626', '#64748b'],
-      },
-    ],
-  };
-
-  const overdueChartData = {
-    labels: overdueTrends.map((x) => x.day),
-    datasets: [
-      {
-        label: 'Overdue Requests',
-        data: overdueTrends.map((x) => x.count),
-        borderColor: '#dc2626',
-        backgroundColor: 'rgba(220,38,38,0.12)',
-        fill: true,
-        tension: 0.3,
-      },
-    ],
-  };
-
-  const priorityChartData = {
-    labels: (overview?.priorities || []).map((x) => x.priority),
-    datasets: [{ label: 'Requests', data: (overview?.priorities || []).map((x) => x.count), backgroundColor: '#0ea5e9' }],
-  };
+  const content = (
+    <AnalyticsContent
+      loading={loading}
+      error={error}
+      analytics={analytics}
+      range={range}
+      setRange={setRange}
+      refresh={fetchAnalytics}
+    />
+  );
 
   return (
     <>
-      <AppShell
-        title="Dashboard Analytics"
-        subtitle="Performance insights and exportable reports"
-        navItems={[
-          { key: 'overview', label: 'Analytics', active: true },
-          { key: 'admin', label: 'Admin Dashboard', onClick: () => navigate('/admin/dashboard') },
-        ]}
-      >
-        <section className="card section-card">
-          <div className="section-header">
-            <h3 className="section-title">Filters & Export</h3>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-secondary" type="button" onClick={() => handleExport('excel')}>Download as Excel</button>
-              <button className="btn btn-secondary" type="button" onClick={() => handleExport('pdf')}>Download as PDF</button>
-            </div>
-          </div>
-          <div className="controls-row">
-            <input className="input" type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} style={{ maxWidth: 180 }} />
-            <input className="input" type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} style={{ maxWidth: 180 }} />
-            <input className="input" placeholder="Department (optional)" value={filters.department === 'All' ? '' : filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value || 'All' })} style={{ maxWidth: 220 }} />
-            <button className="btn btn-secondary" type="button" onClick={() => setFilters(defaultFilters)}>Reset</button>
-            <label className="hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
-              Auto refresh (30s)
-            </label>
-          </div>
-        </section>
+      {role === ROLES.ADMIN ? (
+        <AdminLayout title="Analytics" activeKey="analytics">
+          {content}
+        </AdminLayout>
+      ) : (
+        <AppShell
+          title="Analytics"
+          subtitle="Dedicated visual analytics page"
+          navItems={buildNavItems(role, navigate)}
+        >
+          {content}
+        </AppShell>
+      )}
 
-        <div className="grid-3">
-          <StatCard label="Total Requests" value={overview?.totalRequests || 0} />
-          <StatCard label="Avg Approval Hours" value={overview?.avgApprovalHours || '0.00'} />
-          <StatCard label="Overdue Requests" value={overview?.overdueCount || 0} />
-        </div>
-
-        {loading ? (
-          <section className="card section-card">
-            <div style={{ padding: 16 }} className="hint">Loading analytics...</div>
-          </section>
-        ) : (
-          <>
-            <div className="grid-3">
-              <section className="card section-card">
-                <div className="section-header"><h3 className="section-title">Requests per Department</h3></div>
-                <div style={{ padding: 16, minHeight: 260 }}><Bar data={departmentChartData} options={{ responsive: true, maintainAspectRatio: false }} /></div>
-              </section>
-
-              <section className="card section-card">
-                <div className="section-header"><h3 className="section-title">Requests by Status</h3></div>
-                <div style={{ padding: 16, minHeight: 260 }}><Pie data={statusChartData} options={{ responsive: true, maintainAspectRatio: false }} /></div>
-              </section>
-
-              <section className="card section-card">
-                <div className="section-header"><h3 className="section-title">Requests by Priority</h3></div>
-                <div style={{ padding: 16, minHeight: 260 }}><Bar data={priorityChartData} options={{ responsive: true, maintainAspectRatio: false }} /></div>
-              </section>
-            </div>
-
-            <section className="card section-card">
-              <div className="section-header"><h3 className="section-title">Overdue Request Trends</h3></div>
-              <div style={{ padding: 16, minHeight: 280 }}><Line data={overdueChartData} options={{ responsive: true, maintainAspectRatio: false }} /></div>
-            </section>
-
-            <section className="card section-card">
-              <div className="section-header"><h3 className="section-title">Approval Time Summary</h3></div>
-              <div style={{ padding: 16 }}>
-                <p className="hint" style={{ marginTop: 0 }}>
-                  Approved Requests: {approvalTime?.summary?.approvedRequests || 0} | Min: {approvalTime?.summary?.minApprovalHours || '0.00'}h | Max: {approvalTime?.summary?.maxApprovalHours || '0.00'}h
-                </p>
-                <div className="table-wrap">
-                  <table className="table">
-                    <thead>
-                      <tr><th>Department</th><th>Avg Approval Hours</th></tr>
-                    </thead>
-                    <tbody>
-                      {(approvalTime?.byDepartment || []).map((row) => (
-                        <tr key={row.department}>
-                          <td>{row.department}</td>
-                          <td>{row.avgApprovalHours}</td>
-                        </tr>
-                      ))}
-                      {(approvalTime?.byDepartment || []).length === 0 && (
-                        <tr><td colSpan="2" style={{ textAlign: 'center', color: '#64748b' }}>No approved request data</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </section>
-          </>
-        )}
-      </AppShell>
       <ToastMessage message={toast.message} type={toast.type} onClose={() => setToast({ message: '', type: 'success' })} />
     </>
   );

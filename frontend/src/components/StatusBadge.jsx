@@ -4,6 +4,10 @@ export default function StatusBadge({ status, overdue = false }) {
   const normalized =
     key === 'FULLY_APPROVED' || key === 'APPROVED'
       ? 'approved'
+      : key === 'DRAFT'
+      ? 'draft'
+      : key === 'ESCALATED'
+      ? 'escalated'
       : key === 'REJECTED' || key === 'WITHDRAWN'
       ? 'rejected'
       : 'pending';
