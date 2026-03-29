@@ -25,6 +25,7 @@ exports.getAllRequests = (req, res) => {
       SELECT r.*,
              u.name AS employee_name,
              u.role AS employee_role,
+             COALESCE(r.category, r.type) AS type,
              COALESCE(r.created_at, r.dateCreated) AS created_at,
              COALESCE(r.due_date, r.dueDate) AS due_date,
              CASE

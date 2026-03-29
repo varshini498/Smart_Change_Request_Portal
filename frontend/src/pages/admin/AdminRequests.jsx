@@ -7,6 +7,7 @@ import DeadlineBadge from '../../components/DeadlineBadge';
 import EmptyState from '../../components/EmptyState';
 import StatusBadge from '../../components/StatusBadge';
 import { FolderSearch } from 'lucide-react';
+import { getDisplayRequestNumber } from '../../utils/requestDisplay';
 
 const STATUS_OPTIONS = ['All', 'Pending', 'Escalated', 'Fully Approved', 'Rejected', 'Withdrawn'];
 const PAGE_SIZE = 10;
@@ -116,7 +117,7 @@ export default function AdminRequests() {
       setToast({ message: 'Delete blocked: request is in Manager approval stage', type: 'error' });
       return;
     }
-    if (!window.confirm(`Delete request #${req.id}?`)) return;
+    if (!window.confirm(`Delete request #${getDisplayRequestNumber(req)}?`)) return;
     try {
       await adminService.deleteRequest(req.id);
       setToast({ message: 'Request deleted', type: 'success' });
@@ -194,6 +195,8 @@ export default function AdminRequests() {
                   </th>
                   <th>ID</th>
                   <th>Title</th>
+                  <th>Type</th>
+                  <th>Priority</th>
                   <th>Employee</th>
                   <th>Status</th>
                   <th>Current Level</th>
@@ -204,10 +207,10 @@ export default function AdminRequests() {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan="9" style={{ textAlign: 'center' }}>Loading...</td></tr>
+                  <tr><td colSpan="11" style={{ textAlign: 'center' }}>Loading...</td></tr>
                 ) : pageRows.length === 0 ? (
                   <tr>
-                    <td colSpan="9">
+                    <td colSpan="11">
                       <EmptyState
                         title="No requests found"
                         description="Try changing the filters, or wait for new workflow activity to appear."
@@ -228,8 +231,10 @@ export default function AdminRequests() {
                           }}
                         />
                       </td>
-                      <td>{req.id}</td>
+                      <td>{getDisplayRequestNumber(req)}</td>
                       <td>{req.title}</td>
+                      <td>{req.type || req.category || '-'}</td>
+                      <td>{req.priority || '-'}</td>
                       <td>{req.employee_name || '-'}</td>
                       <td><StatusBadge status={req.status} /></td>
                       <td>{levelLabel(req.current_level)}</td>
@@ -279,7 +284,7 @@ export default function AdminRequests() {
         <div className="modal-backdrop" onClick={() => setOverride(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Override Request</h3>
-            <p>Request #{override.id} - {override.title}</p>
+            <p>Request #{getDisplayRequestNumber(override)} - {override.title}</p>
             <div className="field">
               <label>Status</label>
               <select className="select" value={overrideStatus} onChange={(e) => setOverrideStatus(e.target.value)}>

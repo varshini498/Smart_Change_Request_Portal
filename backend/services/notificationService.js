@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { hasRole } = require('../utils/roles');
+const systemConfigService = require('./systemConfigService');
 
 const VALID_CHANNELS = ['in_app', 'email', 'slack', 'teams'];
 
@@ -28,6 +29,9 @@ const buildMessageFromTemplate = (templateKey, meta = null) => {
 };
 
 const queueNotification = ({ userId, channel = 'in_app', templateKey, meta }) => {
+  if (!systemConfigService.isEnabled('enable_notifications')) {
+    return null;
+  }
   const finalChannel = VALID_CHANNELS.includes(channel) ? channel : 'in_app';
   const requestId = meta?.requestId || null;
   const message = buildMessageFromTemplate(templateKey, meta);
@@ -72,6 +76,9 @@ const getManagersAndAdmins = () =>
   db.prepare('SELECT id, role FROM users').all().filter((row) => hasRole(row.role, ['MANAGER', 'ADMIN'])).map((row) => row.id);
 
 const createBulkNotifications = (userIds, templateKey, meta = null) => {
+  if (!systemConfigService.isEnabled('enable_notifications')) {
+    return;
+  }
   const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
   uniqueUserIds.forEach((userId) => {
     queueNotification({ userId, templateKey, meta, channel: 'in_app' });

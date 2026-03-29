@@ -7,6 +7,7 @@ import ToastMessage from '../../components/ToastMessage';
 import ApprovalFlowTimeline from '../../components/ApprovalFlowTimeline';
 import EmptyState from '../../components/EmptyState';
 import { FolderSearch } from 'lucide-react';
+import { getDisplayRequestNumber } from '../../utils/requestDisplay';
 
 const PRIORITY_OPTIONS = ['All', 'Low', 'Medium', 'High', 'Critical'];
 const PAGE_SIZE = 10;
@@ -61,7 +62,7 @@ export default function TeamLeadPending() {
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     let rows = requests.filter((req) => {
-      const idMatch = String(req.id || '').includes(query);
+      const idMatch = String(getDisplayRequestNumber(req)).includes(query);
       const titleMatch = (req.title || '').toLowerCase().includes(query);
       const priorityMatch = priority === 'All' || (req.priority || '') === priority;
       return (idMatch || titleMatch) && priorityMatch;
@@ -162,6 +163,7 @@ export default function TeamLeadPending() {
                 <tr>
                   <th>Request ID</th>
                   <th>Title</th>
+                  <th>Type</th>
                   <th>Requested By</th>
                   <th>Department</th>
                   <th>Priority</th>
@@ -173,7 +175,7 @@ export default function TeamLeadPending() {
               <tbody>
                 {pageRows.length === 0 ? (
                   <tr>
-                    <td colSpan="8">
+                    <td colSpan="9">
                       <EmptyState
                         title="No matching approvals"
                         description="Try a different search term or priority filter. New approval requests will show up here automatically."
@@ -184,8 +186,9 @@ export default function TeamLeadPending() {
                 ) : (
                   pageRows.map((req) => (
                     <tr key={req.id}>
-                      <td>{req.id}</td>
+                      <td>{getDisplayRequestNumber(req)}</td>
                       <td>{req.title}</td>
+                      <td>{req.type || req.category || '-'}</td>
                       <td>{req.employee_name || req.requestedBy || req.createdBy || '-'}</td>
                       <td>{req.department || '-'}</td>
                       <td>{req.priority || '-'}</td>
@@ -227,7 +230,7 @@ export default function TeamLeadPending() {
             <h3>Request Details</h3>
             <p><strong>Title:</strong> {selected.title}</p>
             <p><strong>Description:</strong> {selected.description}</p>
-            <p><strong>Category:</strong> {selected.category || '-'}</p>
+            <p><strong>Type:</strong> {selected.type || selected.category || '-'}</p>
             <p><strong>Priority:</strong> {selected.priority || '-'}</p>
             <p><strong>Attachments:</strong> {selected.attachment || 'None'}</p>
             <p><strong>Submitted By:</strong> {selected.requestedBy || selected.createdBy || '-'}</p>

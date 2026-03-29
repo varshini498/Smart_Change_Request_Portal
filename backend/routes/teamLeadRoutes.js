@@ -16,6 +16,7 @@ router.get('/pending', authMiddleware, teamLeadOnly, (req, res) => {
     const rows = db.prepare(
       `SELECT
          r.*,
+         COALESCE(r.category, r.type) AS type,
          COALESCE(r.due_date, r.dueDate) AS due_date,
          CASE
            WHEN DATE(COALESCE(r.due_date, r.dueDate)) < DATE('now') THEN 'OVERDUE'
@@ -42,6 +43,7 @@ router.get('/history', authMiddleware, teamLeadOnly, (req, res) => {
     const rows = db.prepare(
       `SELECT
          r.*,
+         COALESCE(r.category, r.type) AS type,
          ra.action AS decision,
          ra.comment,
          ra.timestamp AS decisionDate,
@@ -66,7 +68,10 @@ router.get('/approved-history', authMiddleware, teamLeadOnly, (req, res) => {
     const rows = db.prepare(
       `SELECT
          r.id,
+         COALESCE(r.request_number, r.id) AS request_number,
          r.title,
+         COALESCE(r.category, r.type) AS type,
+         r.priority,
          r.status,
          r.current_level,
          COALESCE(r.created_at, r.dateCreated) AS created_at,

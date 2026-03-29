@@ -10,15 +10,15 @@ import ApprovalFlowTimeline from '../../components/ApprovalFlowTimeline';
 import EmptyState from '../../components/EmptyState';
 import { Inbox } from 'lucide-react';
 
-const initialForm = {
+const createInitialForm = (defaultPriority = 'Medium') => ({
   title: '',
   description: '',
   changeType: 'Application',
-  priority: 'Medium',
+  priority: defaultPriority,
   riskLevel: 'Moderate',
   implementationDate: '',
   attachment: '',
-};
+});
 
 const normalizeStatus = (value) => String(value || '').trim().toUpperCase().replace(/\s+/g, '_');
 
@@ -27,7 +27,13 @@ export default function EmployeeDashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [selected, setSelected] = useState(null);
-  const [formData, setFormData] = useState(initialForm);
+  const [systemConfig, setSystemConfig] = useState({
+    default_priority: 'Medium',
+    max_requests_per_day: 5,
+    enable_notifications: true,
+    sla_days: 3,
+  });
+  const [formData, setFormData] = useState(createInitialForm());
   const [saving, setSaving] = useState(false);
   const [editingRequestId, setEditingRequestId] = useState(null);
   const [toast, setToast] = useState({ message: '', type: 'success' });
@@ -39,7 +45,9 @@ export default function EmployeeDashboard() {
   const fetchMyRequests = async () => {
     try {
       const res = await API.get('/requests/my');
-      setRequests(res.data.requests || []);
+      const nextRequests = res.data.requests || [];
+      console.log('Employee requests:', nextRequests);
+      setRequests(nextRequests);
     } catch (_err) {
       setToast({ message: 'Failed to load requests', type: 'error' });
     }
@@ -49,9 +57,18 @@ export default function EmployeeDashboard() {
     fetchMyRequests();
     const fetchCategories = async () => {
       try {
-        const res = await API.get('/requests/categories');
-        const rows = res.data?.data || [];
+        const [categoriesRes, configRes] = await Promise.all([
+          API.get('/requests/categories'),
+          API.get('/requests/config'),
+        ]);
+        const rows = categoriesRes.data?.data || [];
         if (rows.length) setCategoryOptions(rows.map((row) => row.name));
+        const config = configRes.data?.data || {};
+        setSystemConfig((prev) => ({ ...prev, ...config }));
+        setFormData((prev) => ({
+          ...prev,
+          priority: config.default_priority || prev.priority,
+        }));
       } catch (_err) {
         // Keep fallback categories.
       }
@@ -63,8 +80,8 @@ export default function EmployeeDashboard() {
     const search = searchTerm.toLowerCase();
     return requests.filter((req) => {
       const title = (req.title || '').toLowerCase();
-      const category = (req.category || '').toLowerCase();
-      return title.includes(search) || category.includes(search);
+      const requestType = (req.type || req.category || '').toLowerCase();
+      return title.includes(search) || requestType.includes(search);
     });
   }, [requests, searchTerm]);
 
@@ -90,14 +107,14 @@ export default function EmployeeDashboard() {
     new Date(req.dueDate) < new Date();
 
   const resetFormState = () => {
-    setFormData(initialForm);
+    setFormData(createInitialForm(systemConfig.default_priority));
     setEditingRequestId(null);
     setShowForm(false);
   };
 
   const openNewForm = () => {
     setEditingRequestId(null);
-    setFormData(initialForm);
+    setFormData(createInitialForm(systemConfig.default_priority));
     setShowForm(true);
   };
 
@@ -106,8 +123,8 @@ export default function EmployeeDashboard() {
     setFormData({
       title: req.title || '',
       description: req.description || '',
-      changeType: req.category || 'Application',
-      priority: req.priority || 'Medium',
+      changeType: req.type || req.category || 'Application',
+      priority: req.priority || systemConfig.default_priority || 'Medium',
       riskLevel: req.riskLevel || 'Moderate',
       implementationDate: req.due_date || req.dueDate || '',
       attachment: req.attachment || '',
@@ -172,17 +189,15 @@ export default function EmployeeDashboard() {
       setToast({ message: 'Description must be 20-2000 characters', type: 'error' });
       return false;
     }
-    if (!formData.implementationDate) {
-      setToast({ message: 'Implementation date is required', type: 'error' });
-      return false;
-    }
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const selectedDate = new Date(formData.implementationDate);
-    selectedDate.setHours(0, 0, 0, 0);
-    if (selectedDate < today) {
-      setToast({ message: 'Implementation date cannot be in the past', type: 'error' });
-      return false;
+    if (formData.implementationDate) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const selectedDate = new Date(formData.implementationDate);
+      selectedDate.setHours(0, 0, 0, 0);
+      if (selectedDate < today) {
+        setToast({ message: 'Implementation date cannot be in the past', type: 'error' });
+        return false;
+      }
     }
     return true;
   };
@@ -195,6 +210,7 @@ export default function EmployeeDashboard() {
         title: formData.title.trim(),
         description: formData.description.trim(),
         priority: formData.priority,
+        type: formData.changeType,
         category: formData.changeType,
         dueDate: formData.implementationDate || null,
         attachment: formData.attachment || null,
@@ -227,6 +243,7 @@ export default function EmployeeDashboard() {
         title: formData.title.trim(),
         description: formData.description.trim(),
         priority: formData.priority,
+        type: formData.changeType,
         category: formData.changeType,
         dueDate: formData.implementationDate,
         attachment: formData.attachment,
@@ -259,7 +276,7 @@ export default function EmployeeDashboard() {
     const rows = requests
       .map(
         (req) =>
-          `${req.id},"${req.title}","${req.category || ''}",${req.priority || ''},${req.status},${req.dueDate || req.due_date || ''},${req.dateCreated || req.created_at || ''}`
+          `${req.id},"${req.title}","${req.type || req.category || ''}",${req.priority || ''},${req.status},${req.dueDate || req.due_date || ''},${req.dateCreated || req.created_at || ''}`
       )
       .join('\n');
     const blob = new Blob([headers + rows], { type: 'text/csv' });
@@ -304,7 +321,7 @@ export default function EmployeeDashboard() {
               rows.map((req) => (
                 <tr key={req.id} className={isOverdue(req) ? 'overdue' : ''}>
                   <td>{req.title}</td>
-                  <td>{req.category || '-'}</td>
+                  <td>{req.type || req.category || '-'}</td>
                   <td>{req.priority || '-'}</td>
                   <td>{isOverdue(req) ? <StatusBadge status={req.status} overdue /> : <StatusBadge status={req.status} />}</td>
                   <td>{req.due_date || req.dueDate || '-'}</td>
@@ -424,6 +441,9 @@ export default function EmployeeDashboard() {
                 <div className="field">
                   <label>Implementation Date</label>
                   <input className="input" type="date" value={formData.implementationDate} onChange={(e) => setFormData({ ...formData, implementationDate: e.target.value })} />
+                  <small className="field-hint">
+                    Optional. Blank uses the system SLA window of {systemConfig.sla_days} days.
+                  </small>
                 </div>
               </div>
 
@@ -461,7 +481,7 @@ export default function EmployeeDashboard() {
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '80vh', overflowY: 'auto' }}>
             <h3>Request Details</h3>
             <p><strong>Title:</strong> {selected.title}</p>
-            <p><strong>Type:</strong> {selected.category || '-'}</p>
+            <p><strong>Type:</strong> {selected.type || selected.category || '-'}</p>
             <p><strong>Description:</strong> {selected.description}</p>
             <p><strong>Status:</strong> {selected.status}</p>
             <p><strong>Manager Comment:</strong> {selected.comment || 'Pending review'}</p>

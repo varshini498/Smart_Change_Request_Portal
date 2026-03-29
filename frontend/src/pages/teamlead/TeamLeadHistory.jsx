@@ -4,6 +4,7 @@ import API from '../../api/axios';
 import AppShell from '../../components/AppShell';
 import StatusBadge from '../../components/StatusBadge';
 import ToastMessage from '../../components/ToastMessage';
+import { getDisplayRequestNumber } from '../../utils/requestDisplay';
 
 const levelLabel = (level) => {
   const normalized = Number(level);
@@ -35,7 +36,7 @@ export default function TeamLeadHistory() {
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
     return requests.filter((req) => {
-      const idMatch = String(req.id || '').includes(query);
+      const idMatch = String(getDisplayRequestNumber(req)).includes(query);
       const titleMatch = (req.title || '').toLowerCase().includes(query);
       return idMatch || titleMatch;
     });
@@ -73,6 +74,8 @@ export default function TeamLeadHistory() {
                 <tr>
                   <th>Request ID</th>
                   <th>Title</th>
+                  <th>Type</th>
+                  <th>Priority</th>
                   <th>Employee</th>
                   <th>Current Status</th>
                   <th>Current Level</th>
@@ -83,15 +86,17 @@ export default function TeamLeadHistory() {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan="7" style={{ textAlign: 'center', color: '#64748b' }}>
+                    <td colSpan="9" style={{ textAlign: 'center', color: '#64748b' }}>
                       No approved history
                     </td>
                   </tr>
                 ) : (
                   filtered.map((req) => (
                     <tr key={`${req.id}-${req.approved_at || ''}`}>
-                      <td>{req.id}</td>
+                      <td>{getDisplayRequestNumber(req)}</td>
                       <td>{req.title}</td>
+                      <td>{req.type || req.category || '-'}</td>
+                      <td>{req.priority || '-'}</td>
                       <td>{req.employee_name || '-'}</td>
                       <td><StatusBadge status={req.status} /></td>
                       <td>{levelLabel(req.current_level)}</td>

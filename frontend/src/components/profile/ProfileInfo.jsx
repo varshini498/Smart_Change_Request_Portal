@@ -31,9 +31,9 @@ export default function ProfileInfo({
         )}
       </div>
 
-      <div style={{ padding: 16 }}>
-        <div className="row">
-          <div style={{ maxWidth: 220 }}>
+      <div className="profile-card-body">
+        <div className="profile-info-layout">
+          <div className="profile-photo-panel">
             <label className="hint" style={{ display: 'block', marginBottom: 6 }}>Profile Photo</label>
             <div
               className="avatar-btn"
@@ -73,7 +73,7 @@ export default function ProfileInfo({
             )}
           </div>
 
-          <div style={{ flex: 1 }}>
+          <div className="profile-details-panel">
             <div className="field">
               <label>Full Name *</label>
               <input className="input" value={form.name} disabled={!editMode} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -82,7 +82,7 @@ export default function ProfileInfo({
               <label>Email</label>
               <input className="input" value={profile.email || ''} disabled />
             </div>
-            <div className="row">
+            <div className="profile-fields">
               <div className="field">
                 <label>Phone Number</label>
                 <input className="input" value={form.phone} disabled={!editMode} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+911234567890" />
@@ -96,7 +96,7 @@ export default function ProfileInfo({
                 </select>
               </div>
             </div>
-            <div className="row">
+            <div className="profile-fields">
               <div className="field">
                 <label>Role</label>
                 <input className="input" value={profile.role || ''} disabled />

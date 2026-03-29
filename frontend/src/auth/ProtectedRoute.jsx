@@ -3,13 +3,17 @@ import { useContext } from 'react';
 import { AuthContext } from './AuthContext';
 import { normalizeRole } from '../constants/roles';
 
-export default function ProtectedRoute({ children, role, redirectTo = '/' }) {
-  const { user } = useContext(AuthContext);
+export default function ProtectedRoute({ children, role, allowedRoles, redirectTo = '/' }) {
+  const { user, authLoading } = useContext(AuthContext);
+  if (authLoading) return null;
   if (!user) return <Navigate to="/" />;
 
-  if (role) {
-    const allowedRoles = (Array.isArray(role) ? role : [role]).map(normalizeRole);
-    if (!allowedRoles.includes(normalizeRole(user.role))) {
+  const normalizedAllowedRoles = (allowedRoles || role)
+    ? (Array.isArray(allowedRoles || role) ? (allowedRoles || role) : [allowedRoles || role]).map(normalizeRole)
+    : null;
+
+  if (normalizedAllowedRoles) {
+    if (!normalizedAllowedRoles.includes(normalizeRole(user.role))) {
       return <Navigate to={redirectTo} />;
     }
   }

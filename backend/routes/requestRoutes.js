@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/authMiddleware');
 const { isEmployee, isAdmin } = require('../middleware/roleMiddleware');
 const { ROLE_KEYS, normalizeRole, toDisplayRole, hasRole } = require('../utils/roles');
 const notificationService = require('../services/notificationService');
+const systemConfigService = require('../services/systemConfigService');
 
 const router = express.Router();
 
@@ -137,7 +138,9 @@ const mapRequest = (request) => {
   const dueDate = request.due_date || request.dueDate || null;
   return {
     ...request,
+    request_number: request.request_number || request.id,
     createdBy: getRequestCreatorId(request),
+    type: request.type || request.change_type || request.category || null,
     status,
     overall_status: request.overall_status || status,
     due_date: dueDate,
@@ -147,9 +150,59 @@ const mapRequest = (request) => {
   };
 };
 
-const canAccessRequest = (request, user) =>
-  hasRole(user.role, [ROLE_KEYS.ADMIN, ROLE_KEYS.MANAGER, ROLE_KEYS.TEAM_LEAD]) ||
-  (hasRole(user.role, ROLE_KEYS.EMPLOYEE) && getRequestCreatorId(request) === user.id);
+const getNextRequestNumber = (userId) => {
+  const row = db.prepare(
+    `SELECT MAX(COALESCE(request_number, 0)) AS max_request_number
+     FROM requests
+     WHERE COALESCE(created_by, createdBy) = ?`
+  ).get(userId);
+  return Number(row?.max_request_number || 0) + 1;
+};
+
+const getDefaultPriority = () => systemConfigService.getString('default_priority') || 'Medium';
+
+const calculateDefaultDueDate = () => {
+  const slaDays = systemConfigService.getNumber('sla_days');
+  const dueDate = new Date();
+  dueDate.setHours(0, 0, 0, 0);
+  dueDate.setDate(dueDate.getDate() + slaDays);
+  return dueDate.toISOString();
+};
+
+const resolveDueDate = (value) => {
+  if (value) return value;
+  return calculateDefaultDueDate();
+};
+
+const getTodaySubmittedCount = (userId, excludeRequestId = null) => {
+  const row = db.prepare(
+    `SELECT COUNT(*) AS count
+     FROM requests
+     WHERE COALESCE(created_by, createdBy) = ?
+       AND (? IS NULL OR id <> ?)
+       AND UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) <> 'DRAFT'
+       AND date(COALESCE(submitted_at, created_at, dateCreated), 'localtime') = date('now', 'localtime')`
+  ).get(userId, excludeRequestId, excludeRequestId);
+  return Number(row?.count || 0);
+};
+
+const validateDailyRequestLimit = (userId, excludeRequestId = null) => {
+  const maxRequestsPerDay = systemConfigService.getNumber('max_requests_per_day');
+  const todayCount = getTodaySubmittedCount(userId, excludeRequestId);
+  if (todayCount >= maxRequestsPerDay) {
+    return {
+      ok: false,
+      message: `Daily request limit reached. You can submit up to ${maxRequestsPerDay} requests per day.`,
+    };
+  }
+  return { ok: true };
+};
+
+const canAccessRequest = (request, user) => {
+  const isOwner = Number(getRequestCreatorId(request)) === Number(user.id);
+  const isPrivileged = hasRole(user.role, [ROLE_KEYS.ADMIN, ROLE_KEYS.MANAGER, ROLE_KEYS.TEAM_LEAD]);
+  return isOwner || isPrivileged;
+};
 
 const getApprovalLevelId = (levelName) => {
   const row = db
@@ -489,14 +542,24 @@ const resolveRequestColumn = (preferred, fallback) => {
 
 const createRequestHandler = (req, res) => {
   try {
-    const { title, description, dueDate, due_date } = req.body || {};
+    const { title, description, dueDate, due_date, type, priority } = req.body || {};
     const safeTitle = String(title || '').trim();
     const safeDescription = String(description || '').trim();
+    const safeType = String(type || req.body?.category || req.body?.changeType || 'Others').trim();
+    const safePriority = String(priority || getDefaultPriority()).trim();
 
     if (!safeTitle || !safeDescription) {
       return res.status(400).json({
         success: false,
         message: 'Title and description are required',
+      });
+    }
+
+    const dailyLimitCheck = validateDailyRequestLimit(req.user.id);
+    if (!dailyLimitCheck.ok) {
+      return res.status(400).json({
+        success: false,
+        message: dailyLimitCheck.message,
       });
     }
 
@@ -522,14 +585,19 @@ const createRequestHandler = (req, res) => {
     }
 
     const createdAt = new Date().toISOString();
+    const requestNumber = getNextRequestNumber(req.user.id);
     const insertColumns = ['title', 'description'];
 
     if (hasCreatedBySnake) insertColumns.push('created_by');
     if (hasCreatedBy && !insertColumns.includes('createdBy')) insertColumns.push('createdBy');
+    if (REQUEST_COLUMNS.has('request_number')) insertColumns.push('request_number');
 
     insertColumns.push('status', 'current_level');
+    if (REQUEST_COLUMNS.has('type')) insertColumns.push('type');
+    if (REQUEST_COLUMNS.has('priority')) insertColumns.push('priority');
+    if (REQUEST_COLUMNS.has('category')) insertColumns.push('category');
 
-    const finalDueDate = due_date || dueDate || null;
+    const finalDueDate = resolveDueDate(due_date || dueDate || null);
     const hasDueDateSnake = REQUEST_COLUMNS.has('due_date');
     const hasDueDateLegacy = REQUEST_COLUMNS.has('dueDate');
     if (hasDueDateSnake) insertColumns.push('due_date');
@@ -549,8 +617,12 @@ const createRequestHandler = (req, res) => {
 
     if (hasCreatedBySnake) values.push(req.user.id);
     if (hasCreatedBy) values.push(req.user.id);
+    if (REQUEST_COLUMNS.has('request_number')) values.push(requestNumber);
 
     values.push(WORKFLOW_STATUS.PENDING, 1);
+    if (REQUEST_COLUMNS.has('type')) values.push(safeType);
+    if (REQUEST_COLUMNS.has('priority')) values.push(safePriority);
+    if (REQUEST_COLUMNS.has('category')) values.push(safeType);
 
     if (hasDueDateSnake) values.push(finalDueDate);
     if (hasDueDateLegacy) values.push(finalDueDate);
@@ -564,7 +636,7 @@ const createRequestHandler = (req, res) => {
 
     const inserted = db
       .prepare(
-        `SELECT id, status, current_level, ${createdAtColumn} AS created_at, COALESCE(due_date, dueDate) AS due_date
+        `SELECT id, COALESCE(request_number, id) AS request_number, status, current_level, type, priority, ${createdAtColumn} AS created_at, COALESCE(due_date, dueDate) AS due_date
          FROM requests
          WHERE id = ?`
       )
@@ -615,26 +687,29 @@ router.post('/draft', authMiddleware, isEmployee, (req, res) => {
     const payload = req.body || {};
     const title = String(payload.title || '').trim();
     const description = String(payload.description || '').trim();
-    const priority = String(payload.priority || 'Medium').trim();
-    const category = String(payload.category || payload.changeType || 'Others').trim();
+    const priority = String(payload.priority || getDefaultPriority()).trim();
+    const requestType = String(payload.type || payload.category || payload.changeType || 'Others').trim();
     const attachment = payload.attachment ?? null;
-    const nextDueDate = payload.due_date ?? payload.dueDate ?? payload.implementationDate ?? null;
+    const nextDueDate = resolveDueDate(payload.due_date ?? payload.dueDate ?? payload.implementationDate ?? null);
     const now = new Date().toISOString();
+    const requestNumber = getNextRequestNumber(req.user.id);
 
     const stmt = db.prepare(
       `INSERT INTO requests
-       (title, description, created_by, createdBy, status, overall_status, current_level, priority, category, attachment, due_date, dueDate, created_at, dateCreated, version)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (title, description, created_by, createdBy, request_number, status, overall_status, current_level, type, priority, category, attachment, due_date, dueDate, created_at, dateCreated, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const info = stmt.run(
       title || 'Untitled Draft',
       description || '',
       req.user.id,
       req.user.id,
+      requestNumber,
       WORKFLOW_STATUS.DRAFT,
       WORKFLOW_STATUS.DRAFT,
+      requestType || 'Others',
       priority || 'Medium',
-      category || 'Others',
+      requestType || 'Others',
       attachment,
       nextDueDate,
       nextDueDate,
@@ -654,6 +729,9 @@ router.post('/draft', authMiddleware, isEmployee, (req, res) => {
       success: true,
       data: {
         id: info.lastInsertRowid,
+        request_number: requestNumber,
+        type: requestType || 'Others',
+        priority: priority || 'Medium',
         status: WORKFLOW_STATUS.DRAFT,
         current_level: null,
       },
@@ -680,16 +758,16 @@ router.put('/:id/draft', authMiddleware, isEmployee, (req, res) => {
     const payload = req.body || {};
     const nextTitle = String(payload.title ?? existing.title ?? '').trim();
     const nextDescription = String(payload.description ?? existing.description ?? '').trim();
-    const nextPriority = String(payload.priority ?? existing.priority ?? 'Medium').trim();
-    const nextCategory = String(payload.category ?? payload.changeType ?? existing.category ?? 'Others').trim();
+    const nextPriority = String(payload.priority ?? existing.priority ?? getDefaultPriority()).trim();
+    const nextType = String(payload.type ?? payload.category ?? payload.changeType ?? existing.type ?? existing.category ?? 'Others').trim();
     const nextAttachment = payload.attachment ?? existing.attachment ?? null;
-    const nextDueDate = payload.due_date ?? payload.dueDate ?? payload.implementationDate ?? existing.due_date ?? existing.dueDate ?? null;
+    const nextDueDate = payload.due_date ?? payload.dueDate ?? payload.implementationDate ?? existing.due_date ?? existing.dueDate ?? calculateDefaultDueDate();
 
     db.prepare(
       `UPDATE requests
-       SET title = ?, description = ?, priority = ?, category = ?, attachment = ?, due_date = ?, dueDate = ?, version = COALESCE(version, 1) + 1
+       SET title = ?, description = ?, type = ?, priority = ?, category = ?, attachment = ?, due_date = ?, dueDate = ?, version = COALESCE(version, 1) + 1
        WHERE id = ?`
-    ).run(nextTitle || 'Untitled Draft', nextDescription || '', nextPriority, nextCategory, nextAttachment, nextDueDate, nextDueDate, id);
+    ).run(nextTitle || 'Untitled Draft', nextDescription || '', nextType, nextPriority, nextType, nextAttachment, nextDueDate, nextDueDate, id);
 
     addAuditLog({
       requestId: id,
@@ -724,12 +802,33 @@ router.put('/:id/submit', authMiddleware, isEmployee, (req, res) => {
       return res.status(400).json({ success: false, message: 'Title and description are required before submit' });
     }
 
+    const dailyLimitCheck = validateDailyRequestLimit(
+      req.user.id,
+      status === WORKFLOW_STATUS.DRAFT ? null : id
+    );
+    if (!dailyLimitCheck.ok) {
+      return res.status(400).json({ success: false, message: dailyLimitCheck.message });
+    }
+
     const now = new Date().toISOString();
+    const fallbackDueDate = calculateDefaultDueDate();
     db.prepare(
       `UPDATE requests
-       SET status = ?, overall_status = ?, current_level = ?, submitted_at = ?, completed_at = NULL
+       SET status = ?, overall_status = ?, current_level = ?, submitted_at = ?, completed_at = NULL,
+           priority = COALESCE(NULLIF(priority, ''), ?),
+           due_date = COALESCE(due_date, dueDate, ?),
+           dueDate = COALESCE(dueDate, due_date, ?)
        WHERE id = ?`
-    ).run(WORKFLOW_STATUS.PENDING, WORKFLOW_STATUS.PENDING, LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD], now, id);
+    ).run(
+      WORKFLOW_STATUS.PENDING,
+      WORKFLOW_STATUS.PENDING,
+      LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD],
+      now,
+      getDefaultPriority(),
+      fallbackDueDate,
+      fallbackDueDate,
+      id
+    );
 
     addAuditLog({
       requestId: id,
@@ -753,7 +852,13 @@ router.put('/:id/submit', authMiddleware, isEmployee, (req, res) => {
     return res.json({
       success: true,
       message: 'Request submitted for approval',
-      data: { id, status: WORKFLOW_STATUS.PENDING, current_level: LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD], submitted_at: now },
+      data: {
+        id,
+        request_number: existing.request_number || id,
+        status: WORKFLOW_STATUS.PENDING,
+        current_level: LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD],
+        submitted_at: now,
+      },
     });
   } catch (err) {
     console.error('SUBMIT DRAFT ERROR:', err);
@@ -794,6 +899,18 @@ router.get('/categories', authMiddleware, (req, res) => {
   return res.json({ success: true, data: categories });
 });
 
+router.get('/config', authMiddleware, (req, res) => {
+  return res.json({
+    success: true,
+    data: {
+      default_priority: getDefaultPriority(),
+      max_requests_per_day: systemConfigService.getNumber('max_requests_per_day'),
+      enable_notifications: systemConfigService.isEnabled('enable_notifications'),
+      sla_days: systemConfigService.getNumber('sla_days'),
+    },
+  });
+});
+
 router.get('/my', authMiddleware, isEmployee, (req, res) => {
   const rows = db
     .prepare('SELECT * FROM requests WHERE COALESCE(created_by, createdBy) = ? ORDER BY dateCreated DESC')
@@ -816,11 +933,12 @@ router.put('/:id', authMiddleware, isEmployee, (req, res) => {
 
   saveRequestVersionSnapshot({ request: existing, updatedBy: req.user.id });
 
-  const { title, description, priority, dueDate, due_date, category, attachment } = req.body || {};
+  const { title, description, type, priority, dueDate, due_date, category, attachment } = req.body || {};
   const nextTitle = String(title || existing.title).trim();
   const nextDescription = String(description || existing.description).trim();
   const nextPriority = priority || existing.priority || 'Normal';
-  const nextCategory = CATEGORY_VALUES.includes(category) ? category : (existing.category || 'Others');
+  const requestedType = type ?? category;
+  const nextType = CATEGORY_VALUES.includes(requestedType) ? requestedType : (existing.type || existing.category || 'Others');
   const nextAttachment = attachment ?? existing.attachment ?? null;
   const nextDueDate = due_date ?? dueDate ?? existing.due_date ?? existing.dueDate ?? null;
 
@@ -830,9 +948,9 @@ router.put('/:id', authMiddleware, isEmployee, (req, res) => {
 
   db.prepare(
     `UPDATE requests
-     SET title = ?, description = ?, priority = ?, category = ?, attachment = ?, dueDate = ?, due_date = ?, version = COALESCE(version, 1) + 1
+     SET title = ?, description = ?, type = ?, priority = ?, category = ?, attachment = ?, dueDate = ?, due_date = ?, version = COALESCE(version, 1) + 1
      WHERE id = ?`
-  ).run(nextTitle, nextDescription, nextPriority, nextCategory, nextAttachment, nextDueDate, nextDueDate, id);
+  ).run(nextTitle, nextDescription, nextType, nextPriority, nextType, nextAttachment, nextDueDate, nextDueDate, id);
 
   addAuditLog({ requestId: id, action: 'Updated', actorId: req.user.id, actorRole: req.user.role });
   return res.json({ message: 'Request updated successfully', requestId: id });
@@ -973,8 +1091,13 @@ router.get('/:id', authMiddleware, (req, res) => {
     )
     .get(id);
 
+  console.log('User:', req.user);
+  console.log('Request:', request);
+
   if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
-  if (!canAccessRequest(request, req.user)) return res.status(403).json({ success: false, message: 'Forbidden' });
+  if (!canAccessRequest(request, req.user)) {
+    return res.status(403).json({ success: false, message: 'Unauthorized' });
+  }
 
   const approvalRows = db
     .prepare(

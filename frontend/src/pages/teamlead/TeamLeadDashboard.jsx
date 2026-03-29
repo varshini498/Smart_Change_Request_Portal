@@ -8,6 +8,7 @@ import DeadlineBadge from '../../components/DeadlineBadge';
 import ToastMessage from '../../components/ToastMessage';
 import EmptyState from '../../components/EmptyState';
 import { FolderSearch } from 'lucide-react';
+import { getDisplayRequestNumber } from '../../utils/requestDisplay';
 
 export default function TeamLeadDashboard() {
   const navigate = useNavigate();
@@ -74,6 +75,7 @@ export default function TeamLeadDashboard() {
                 <tr>
                   <th>Request ID</th>
                   <th>Title</th>
+                  <th>Type</th>
                   <th>Requested By</th>
                   <th>Department</th>
                   <th>Priority</th>
@@ -97,8 +99,9 @@ export default function TeamLeadDashboard() {
                 ) : (
                   recentPending.map((req) => (
                     <tr key={req.id}>
-                      <td>{req.id}</td>
+                      <td>{getDisplayRequestNumber(req)}</td>
                       <td>{req.title}</td>
+                      <td>{req.type || req.category || '-'}</td>
                       <td>{req.requestedBy || req.createdBy || '-'}</td>
                       <td>{req.department || '-'}</td>
                       <td>{req.priority || '-'}</td>

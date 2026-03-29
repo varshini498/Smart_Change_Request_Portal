@@ -50,6 +50,11 @@ router.post('/login', async (req, res) => {
     }
     console.log('[LOGIN] user found:', { id: user.id, email: user.email, role: user.role });
 
+    if (!user.is_active) {
+      console.log('[LOGIN] blocked inactive user:', user.email);
+      return res.status(403).json({ message: 'Account is inactive. Please contact admin.' });
+    }
+
     const valid = await bcrypt.compare(password, user.password);
     console.log('[LOGIN] password match:', valid);
     if (!valid) {
@@ -72,8 +77,11 @@ router.post('/login', async (req, res) => {
       token,
       user: {
         id: user.id,
+        name: user.name,
         email: user.email,
         role: roleKey,
+        role_label: toDisplayRole(roleKey),
+        roll_no: user.roll_no,
       },
     });
   } catch (err) {

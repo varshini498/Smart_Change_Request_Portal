@@ -14,7 +14,8 @@ export default function AppearanceSettings({
           {processing ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
-      <div style={{ padding: 16 }} className="row">
+      <div className="profile-card-body">
+        <div className="profile-fields">
         <div className="field">
           <label>Theme</label>
           <select className="select" value={theme} onChange={(e) => setTheme(e.target.value)}>
@@ -29,6 +30,7 @@ export default function AppearanceSettings({
             <option value="medium">Medium</option>
             <option value="large">Large</option>
           </select>
+        </div>
         </div>
       </div>
     </section>

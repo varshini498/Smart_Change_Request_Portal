@@ -1,12 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
-const ThemeContext = createContext(null);
-const STORAGE_KEY = 'smartcr_theme';
+export const ThemeContext = createContext(null);
+const STORAGE_KEY = 'theme';
+const LEGACY_STORAGE_KEY = 'smartcr_theme';
 const FONT_KEY = 'smartcr_font_size';
 
 const getInitialTheme = () => {
   const saved = localStorage.getItem(STORAGE_KEY);
+  const legacySaved = localStorage.getItem(LEGACY_STORAGE_KEY);
   if (saved === 'light' || saved === 'dark') return saved;
+  if (legacySaved === 'light' || legacySaved === 'dark') return legacySaved;
   return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 };
 
@@ -23,6 +26,7 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem(STORAGE_KEY, theme);
+    localStorage.setItem(LEGACY_STORAGE_KEY, theme);
   }, [theme]);
 
   useEffect(() => {

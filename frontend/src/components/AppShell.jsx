@@ -13,6 +13,7 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 import ThemeToggle from './ThemeToggle';
 import NotificationBell from './NotificationBell';
+import CopilotPanel from './CopilotPanel';
 
 export default function AppShell({ title, subtitle, navItems = [], children }) {
   const [open, setOpen] = useState(false);
@@ -22,6 +23,7 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
   const profileRef = useRef(null);
 
   const name = localStorage.getItem('name') || 'User';
+  const role = localStorage.getItem('role') || '';
   const dashboardThemePaths = new Set([
     '/employee/dashboard',
     '/teamlead/dashboard',
@@ -34,6 +36,7 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
     '/admin-dashboard',
   ]);
   const showThemeToggle = dashboardThemePaths.has(location.pathname);
+  const showCopilot = role === 'EMPLOYEE' && location.pathname === '/employee/dashboard';
   const finalNavItems = navItems.some((item) => item.key === 'analytics')
     ? navItems
     : [
@@ -110,7 +113,7 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
                   <button type="button" style={styles.profileItem} onClick={() => { setProfileOpen(false); navigate('/profile'); }}>
                     View Profile
                   </button>
-                  <button type="button" style={styles.profileItem} onClick={() => { setProfileOpen(false); navigate('/profile'); }}>
+                  <button type="button" style={styles.profileItem} onClick={() => { setProfileOpen(false); navigate('/profile', { state: { section: 'password' } }); }}>
                     Change Password
                   </button>
                   <button type="button" style={styles.profileItem} onClick={logout}>
@@ -122,6 +125,7 @@ export default function AppShell({ title, subtitle, navItems = [], children }) {
           </div>
         </header>
         <section className="page-content fade-in">{children}</section>
+        {showCopilot ? <CopilotPanel /> : null}
       </main>
     </div>
   );

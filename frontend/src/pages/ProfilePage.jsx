@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import API from '../api/axios';
 import ToastMessage from '../components/ToastMessage';
 import { useTheme } from '../context/ThemeContext';
@@ -14,9 +14,10 @@ const sectionOrder = ['profile', 'password', 'notifications', 'appearance'];
 
 export default function ProfilePage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { theme, setTheme, fontSize, setFontSize } = useTheme();
 
-  const [activeSection, setActiveSection] = useState('profile');
+  const [activeSection, setActiveSection] = useState(location.state?.section || 'profile');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -82,7 +83,6 @@ export default function ProfilePage() {
         notifyComments: !!prefs?.notifyComments,
         notifyOverdue: !!prefs?.notifyOverdue,
       });
-      if (settings?.theme) setTheme(settings.theme);
       if (settings?.fontSize) setFontSize(settings.fontSize);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load profile data');
@@ -94,6 +94,12 @@ export default function ProfilePage() {
   useEffect(() => {
     loadAll();
   }, []);
+
+  useEffect(() => {
+    if (location.state?.section && sectionOrder.includes(location.state.section)) {
+      setActiveSection(location.state.section);
+    }
+  }, [location.state]);
 
   const saveProfile = async () => {
     const name = profileForm.name.trim();
@@ -227,9 +233,9 @@ export default function ProfilePage() {
 
   return (
     <>
-      <div className="auth-page" style={{ padding: 20 }}>
-        <div className="auth-card" style={{ maxWidth: 1080 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div className={`profile-page-shell ${theme === 'dark' ? 'dark-theme' : 'light-theme'}`}>
+        <div className="profile-page-card">
+          <div className="profile-page-header">
             <div>
               <h1 className="auth-title" style={{ marginBottom: 4 }}>User Profile</h1>
               <p className="auth-subtitle" style={{ margin: 0 }}>Manage your account securely</p>
@@ -245,8 +251,8 @@ export default function ProfilePage() {
           )}
 
           {!loading && !error && profile && (
-            <div className="row" style={{ alignItems: 'flex-start' }}>
-              <aside className="card" style={{ width: 240, minWidth: 210, padding: 10 }}>
+            <div className="profile-container">
+              <aside className="card profile-sidebar">
                 {sectionOrder.map((section) => {
                   const map = {
                     profile: 'Profile Info',
@@ -276,7 +282,7 @@ export default function ProfilePage() {
                 })}
               </aside>
 
-              <div style={{ flex: 1 }}>
+              <div className="profile-content">
                 {activeSection === 'profile' && (
                   <ProfileInfo
                     profile={profile}

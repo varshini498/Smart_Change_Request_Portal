@@ -1,22 +1,69 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import AdminLayout from './AdminLayout';
 import { adminService } from '../../services/adminService';
 import ToastMessage from '../../components/ToastMessage';
 
+const renderControl = ({ row, value, disabled, onChange }) => {
+  if (row.inputType === 'boolean') {
+    return (
+      <label className="switch" aria-label={row.label}>
+        <input
+          type="checkbox"
+          checked={String(value) === 'true'}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked ? 'true' : 'false')}
+        />
+        <span className="slider" />
+      </label>
+    );
+  }
+
+  if (row.inputType === 'select') {
+    return (
+      <select className="select settings-value-input" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+        {row.options?.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <input
+      className="input settings-value-input"
+      type="number"
+      min={row.min}
+      max={row.max}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+};
+
 export default function AdminSettings() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState(null);
-  const [newSetting, setNewSetting] = useState({ key: '', value: '' });
+  const [draftValues, setDraftValues] = useState({});
+  const [editingKey, setEditingKey] = useState(null);
   const [toast, setToast] = useState({ message: '', type: 'success' });
 
   const loadSettings = async () => {
     try {
       setLoading(true);
       const res = await adminService.getSettings();
-      setRows(res.data.data || []);
-    } catch (err) {
-      setToast({ message: 'Failed to load settings', type: 'error' });
+      const nextRows = res.data?.data || [];
+      setRows(nextRows);
+      setDraftValues(
+        nextRows.reduce((acc, row) => {
+          acc[row.key] = row.value;
+          return acc;
+        }, {})
+      );
+    } catch (_err) {
+      setToast({ message: 'Failed to load system configuration', type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -26,120 +73,95 @@ export default function AdminSettings() {
     loadSettings();
   }, []);
 
-  const handleSave = async (key, value) => {
+  const editingRow = useMemo(
+    () => rows.find((row) => row.key === editingKey) || null,
+    [rows, editingKey]
+  );
+
+  const handleSave = async (key) => {
     try {
-      await adminService.upsertSetting({ key, value });
-      setEditing(null);
+      await adminService.upsertSetting({ key, value: draftValues[key] });
+      setEditingKey(null);
+      setToast({ message: 'Configuration updated', type: 'success' });
       loadSettings();
     } catch (err) {
-      setToast({ message: 'Update failed', type: 'error' });
+      setToast({ message: err.response?.data?.message || 'Update failed', type: 'error' });
     }
   };
 
-  const handleDelete = async (key) => {
-    if (!window.confirm('Delete this setting?')) return;
-    try {
-      await adminService.deleteSetting(key);
-      loadSettings();
-    } catch (err) {
-      setToast({ message: 'Delete failed', type: 'error' });
+  const handleCancel = () => {
+    if (editingRow) {
+      setDraftValues((prev) => ({ ...prev, [editingRow.key]: editingRow.value }));
     }
-  };
-
-  const handleCreate = async () => {
-    if (!newSetting.key.trim()) {
-      setToast({ message: 'Key is required', type: 'error' });
-      return;
-    }
-    try {
-      await adminService.upsertSetting({ key: newSetting.key.trim(), value: newSetting.value });
-      setNewSetting({ key: '', value: '' });
-      loadSettings();
-    } catch (err) {
-      setToast({ message: 'Create failed', type: 'error' });
-    }
+    setEditingKey(null);
   };
 
   return (
     <>
-      <AdminLayout title="Settings" activeKey="settings">
-        <section className="card section-card">
+      <AdminLayout title="System Configuration" activeKey="settings">
+        <section className="card section-card settings-panel">
           <div className="section-header">
-            <h3 className="section-title">System Settings</h3>
-          </div>
-
-          <div className="settings-create">
-            <input
-              className="input"
-              placeholder="Key"
-              value={newSetting.key}
-              onChange={(e) => setNewSetting({ ...newSetting, key: e.target.value })}
-            />
-            <input
-              className="input"
-              placeholder="Value"
-              value={newSetting.value}
-              onChange={(e) => setNewSetting({ ...newSetting, value: e.target.value })}
-            />
-            <button className="btn btn-primary" type="button" onClick={handleCreate}>Add</button>
+            <div>
+              <h3 className="section-title">System Configuration Panel</h3>
+              <p className="section-subtitle">
+                Control request defaults, daily submission limits, notification delivery, and SLA-based deadlines from
+                one place.
+              </p>
+            </div>
           </div>
 
           {loading ? (
-            <div>Loading settings...</div>
+            <div>Loading system configuration...</div>
           ) : (
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Key</th>
-                    <th>Value</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.length === 0 ? (
-                    <tr><td colSpan="3" style={{ textAlign: 'center', color: '#64748b' }}>No settings</td></tr>
-                  ) : (
-                    rows.map((row) => (
-                      <tr key={row.key}>
-                        <td>{row.key}</td>
-                        <td>
-                          {editing?.key === row.key ? (
-                            <input
-                              className="input"
-                              value={editing.value}
-                              onChange={(e) => setEditing({ ...editing, value: e.target.value })}
-                            />
-                          ) : (
-                            row.value
-                          )}
-                        </td>
-                        <td>
-                          {editing?.key === row.key ? (
-                            <>
-                              <button className="btn btn-primary" type="button" onClick={() => handleSave(editing.key, editing.value)}>
-                                Save
-                              </button>
-                              <button className="btn btn-secondary" type="button" onClick={() => setEditing(null)}>
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button className="btn btn-secondary" type="button" onClick={() => setEditing({ key: row.key, value: row.value })}>
-                                Edit
-                              </button>
-                              <button className="btn btn-danger" type="button" onClick={() => handleDelete(row.key)}>
-                                Delete
-                              </button>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="settings-grid">
+              <div className="settings-grid-header">
+                <span>Setting Name</span>
+                <span>Value</span>
+                <span>Action</span>
+              </div>
+
+              {rows.map((row) => {
+                const isEditing = editingKey === row.key;
+                return (
+                  <div key={row.key} className="settings-row">
+                    <div className="settings-name">
+                      <strong>{row.label}</strong>
+                      <p>{row.description}</p>
+                      <span className="settings-key">{row.key}</span>
+                    </div>
+
+                    <div className="settings-control">
+                      {renderControl({
+                        row,
+                        value: draftValues[row.key] ?? row.value,
+                        disabled: !isEditing,
+                        onChange: (value) =>
+                          setDraftValues((prev) => ({
+                            ...prev,
+                            [row.key]: value,
+                          })),
+                      })}
+                    </div>
+
+                    <div className="settings-actions">
+                      {isEditing ? (
+                        <>
+                          <button className="btn btn-primary" type="button" onClick={() => handleSave(row.key)}>
+                            Save
+                          </button>
+                          <button className="btn btn-secondary" type="button" onClick={handleCancel}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button className="btn btn-secondary" type="button" onClick={() => setEditingKey(row.key)}>
+                          Edit
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>

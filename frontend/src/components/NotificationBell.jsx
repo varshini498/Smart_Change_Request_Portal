@@ -70,6 +70,17 @@ export default function NotificationBell() {
 
   const topItems = useMemo(() => items.slice(0, 5), [items]);
 
+  const resolveRequestId = (item) => {
+    if (item?.requestId) return item.requestId;
+    if (item?.request_id) return item.request_id;
+    try {
+      const meta = item?.metaJson ? JSON.parse(item.metaJson) : null;
+      return meta?.requestId || meta?.request_id || null;
+    } catch (_error) {
+      return null;
+    }
+  };
+
   const routeForNotification = (requestId) => {
     if (!requestId) return null;
     return `/requests/${requestId}`;
@@ -77,10 +88,12 @@ export default function NotificationBell() {
 
   const markOneRead = async (item) => {
     try {
+      console.log('notification', item);
       await API.put(`/notifications/${item.id}/read`);
       setItems((prev) => prev.filter((row) => row.id !== item.id));
       setUnreadCount((prev) => Math.max(0, prev - 1));
-      const target = routeForNotification(item.requestId);
+      const resolvedRequestId = resolveRequestId(item);
+      const target = routeForNotification(resolvedRequestId);
       if (target) {
         setOpen(false);
         navigate(target);
@@ -130,13 +143,11 @@ export default function NotificationBell() {
                 <button
                   key={item.id}
                   type="button"
-                  style={{
-                    ...styles.item,
-                    background: item.status === 'unread' ? '#eff6ff' : '#ffffff',
-                  }}
+                  className={`notification-item ${item.status === 'unread' ? 'unread' : ''}`}
+                  style={styles.item}
                   onClick={() => markOneRead(item)}
                 >
-                  <div style={styles.itemText}>{item.message || formatLabel(item.templateKey, item.metaJson)}</div>
+                  <div className="notification-item-text" style={styles.itemText}>{item.message || formatLabel(item.templateKey, item.metaJson)}</div>
                   <div style={styles.itemTime}>{new Date(item.createdAt).toLocaleString()}</div>
                 </button>
               ))
@@ -217,10 +228,10 @@ const styles = {
     textAlign: 'left',
     padding: '0.85rem 1rem',
     cursor: 'pointer',
+    background: 'transparent',
   },
   itemText: {
     fontSize: '0.95rem',
-    color: 'var(--text)',
     marginBottom: '0.3rem',
   },
   itemTime: {

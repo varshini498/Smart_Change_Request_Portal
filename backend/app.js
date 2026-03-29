@@ -30,6 +30,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/policies", policyRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/dashboard", copilotRoutes);
+app.use("/api", copilotRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/teamlead", teamLeadRoutes);

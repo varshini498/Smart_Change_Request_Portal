@@ -22,21 +22,25 @@ export default function Login() {
       const res = await axios.post('/auth/login', { email, password });
       if (!res.data.token || !res.data.user?.role) throw new Error('Invalid login response');
 
-      localStorage.setItem('token', res.data.token);
       const role = normalizeRole(res.data.user.role);
+      const nextUser = {
+        token: res.data.token,
+        id: res.data.user.id,
+        role,
+        name: res.data.user.name || '',
+        email: res.data.user.email || '',
+        roll_no: res.data.user.roll_no || '',
+      };
+
+      localStorage.setItem('token', res.data.token);
+      localStorage.setItem('user', JSON.stringify(nextUser));
       localStorage.setItem('role', role);
       localStorage.setItem('role_label', res.data.user.role);
       localStorage.setItem('name', res.data.user.name || '');
       localStorage.setItem('email', res.data.user.email || '');
       localStorage.setItem('roll_no', res.data.user.roll_no || '');
 
-      setUser({
-        token: res.data.token,
-        role,
-        name: res.data.user.name,
-        email: res.data.user.email,
-        roll_no: res.data.user.roll_no,
-      });
+      setUser(nextUser);
 
       if (role === ROLES.ADMIN) navigate('/admin/dashboard');
       else if (role === ROLES.MANAGER) navigate('/manager/dashboard');
@@ -56,6 +60,7 @@ export default function Login() {
         <div className="auth-left-circle auth-left-circle-two" />
         <div className="login-visual-copy">
           <h1>Smart Change Request Portal</h1>
+          <p className="auth-tagline">Smarter requests. Faster decisions.</p>
           <span className="auth-title-line" />
         </div>
       </section>

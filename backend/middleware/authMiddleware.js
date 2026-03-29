@@ -13,13 +13,17 @@ const verifyToken = function(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    console.log('VERIFY TOKEN:', decoded);
+    console.log('Decoded user:', decoded);
     const user = db
-      .prepare('SELECT id, name, email, role, roll_no FROM users WHERE id = ?')
+      .prepare('SELECT id, name, email, role, roll_no, is_active FROM users WHERE id = ?')
       .get(decoded.id);
 
     if (!user) {
       return res.status(401).json({ message: 'Session invalid. Please login again.' });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({ message: 'Account is inactive. Please contact admin.' });
     }
 
     req.user = {

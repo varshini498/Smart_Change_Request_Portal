@@ -76,6 +76,9 @@ console.log('REQUESTS TABLE SCHEMA:', requestSchema);
 if (!requestColumns.includes('category')) {
   db.prepare(`ALTER TABLE requests ADD COLUMN category TEXT`).run();
 }
+if (!requestColumns.includes('type')) {
+  db.prepare(`ALTER TABLE requests ADD COLUMN type TEXT`).run();
+}
 if (!requestColumns.includes('attachment')) {
   db.prepare(`ALTER TABLE requests ADD COLUMN attachment TEXT`).run();
 }
@@ -97,12 +100,46 @@ if (!requestColumns.includes('created_at')) {
 if (!requestColumns.includes('due_date')) {
   db.prepare(`ALTER TABLE requests ADD COLUMN due_date TEXT`).run();
 }
+if (!requestColumns.includes('request_number')) {
+  db.prepare(`ALTER TABLE requests ADD COLUMN request_number INTEGER`).run();
+}
 if (!requestColumns.includes('version')) {
   db.prepare(`ALTER TABLE requests ADD COLUMN version INTEGER NOT NULL DEFAULT 1`).run();
 }
 if (!requestColumns.includes('submitted_at')) {
   db.prepare(`ALTER TABLE requests ADD COLUMN submitted_at TEXT`).run();
 }
+const requestsNeedingNumber = db.prepare(
+  `SELECT id, COALESCE(created_by, createdBy) AS creator_id, COALESCE(created_at, dateCreated, completed_at) AS created_marker
+   FROM requests
+   WHERE request_number IS NULL
+   ORDER BY creator_id ASC, datetime(COALESCE(created_at, dateCreated, completed_at, '1970-01-01T00:00:00.000Z')) ASC, id ASC`
+).all();
+if (requestsNeedingNumber.length) {
+  const nextByUser = new Map();
+  const existingByUser = db.prepare(
+    `SELECT COALESCE(created_by, createdBy) AS creator_id, MAX(COALESCE(request_number, 0)) AS max_request_number
+     FROM requests
+     GROUP BY COALESCE(created_by, createdBy)`
+  ).all();
+
+  existingByUser.forEach((row) => {
+    nextByUser.set(Number(row.creator_id), Number(row.max_request_number || 0));
+  });
+
+  const updateRequestNumber = db.prepare('UPDATE requests SET request_number = ? WHERE id = ?');
+  requestsNeedingNumber.forEach((row) => {
+    const creatorId = Number(row.creator_id);
+    const next = (nextByUser.get(creatorId) || 0) + 1;
+    updateRequestNumber.run(next, row.id);
+    nextByUser.set(creatorId, next);
+  });
+}
+db.prepare(
+  `UPDATE requests
+   SET type = COALESCE(NULLIF(TRIM(CAST(category AS TEXT)), ''), type)
+   WHERE type IS NULL OR TRIM(CAST(type AS TEXT)) = ''`
+).run();
 db.prepare(
   `UPDATE requests
    SET due_date = COALESCE(NULLIF(TRIM(CAST(dueDate AS TEXT)), ''), due_date)
@@ -251,6 +288,14 @@ db.prepare(
   `INSERT OR IGNORE INTO settings (key, value)
    SELECT key, value FROM system_settings`
 ).run();
+const defaultSettingsSeed = [
+  ['default_priority', 'Medium'],
+  ['max_requests_per_day', '5'],
+  ['enable_notifications', 'true'],
+  ['sla_days', '3'],
+];
+const insertSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
+defaultSettingsSeed.forEach(([key, value]) => insertSetting.run(key, value));
 
 db.prepare(`
   CREATE TABLE IF NOT EXISTS categories (

@@ -1,5 +1,8 @@
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BarChart3, FolderKanban, LayoutDashboard, Logs, Settings, Shapes, Users } from 'lucide-react';
+import ThemeToggle from '../../components/ThemeToggle';
+import NotificationBell from '../../components/NotificationBell';
 
 const NAV_ITEMS = [
   { key: 'dashboard', label: 'Dashboard', path: '/admin/dashboard' },
@@ -13,6 +16,9 @@ const NAV_ITEMS = [
 
 export default function AdminLayout({ title, activeKey, children }) {
   const navigate = useNavigate();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef(null);
+  const name = localStorage.getItem('name') || 'Admin';
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -20,6 +26,15 @@ export default function AdminLayout({ title, activeKey, children }) {
     localStorage.removeItem('name');
     navigate('/login');
   };
+
+  useEffect(() => {
+    const onDocClick = (event) => {
+      if (!profileRef.current) return;
+      if (!profileRef.current.contains(event.target)) setProfileOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
 
   return (
     <div className="admin-layout">
@@ -49,9 +64,33 @@ export default function AdminLayout({ title, activeKey, children }) {
             <h2>{title}</h2>
             <p>Administrative control panel</p>
           </div>
-          <button className="btn btn-secondary" type="button" onClick={handleLogout}>
-            Logout
-          </button>
+          <div className="topbar-right">
+            <ThemeToggle />
+            <NotificationBell />
+            <div ref={profileRef} style={{ position: 'relative' }}>
+              <button
+                type="button"
+                className="avatar-btn"
+                title="Profile"
+                onClick={() => setProfileOpen((value) => !value)}
+              >
+                {name[0]?.toUpperCase() || 'A'}
+              </button>
+              {profileOpen && (
+                <div style={styles.profileMenu}>
+                  <button type="button" style={styles.profileItem} onClick={() => { setProfileOpen(false); navigate('/profile'); }}>
+                    View Profile
+                  </button>
+                  <button type="button" style={styles.profileItem} onClick={() => { setProfileOpen(false); navigate('/profile', { state: { section: 'password' } }); }}>
+                    Change Password
+                  </button>
+                  <button type="button" style={styles.profileItem} onClick={handleLogout}>
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
         </header>
 
         <main className="fade-in">{children}</main>
@@ -59,6 +98,31 @@ export default function AdminLayout({ title, activeKey, children }) {
     </div>
   );
 }
+
+const styles = {
+  profileMenu: {
+    position: 'absolute',
+    right: 0,
+    top: '44px',
+    minWidth: '180px',
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
+    borderRadius: '12px',
+    boxShadow: 'var(--shadow)',
+    zIndex: 3400,
+    overflow: 'hidden',
+    animation: 'slide-down 0.25s ease',
+  },
+  profileItem: {
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    textAlign: 'left',
+    padding: '10px 12px',
+    cursor: 'pointer',
+    color: 'var(--text)',
+  },
+};
 
 function resolveAdminIcon(key) {
   switch (key) {

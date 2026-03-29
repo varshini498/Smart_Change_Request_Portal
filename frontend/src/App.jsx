@@ -20,12 +20,16 @@ import TeamLeadDashboard from './pages/teamlead/TeamLeadDashboard';
 import TeamLeadPending from './pages/teamlead/TeamLeadPending';
 import TeamLeadHistory from './pages/teamlead/TeamLeadHistory';
 import TeamLeadRequestDetails from './pages/teamlead/TeamLeadRequestDetails';
+import { useTheme } from './context/ThemeContext';
 
 function App() {
+  const { theme } = useTheme();
+
   return (
     <AuthProvider>
-      <Router>
-        <Routes>
+      <div className={`theme-root ${theme === 'dark' ? 'dark-theme' : 'light-theme'}`}>
+        <Router>
+          <Routes>
           <Route path="/" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route
@@ -71,7 +75,10 @@ function App() {
           <Route
             path="/requests/:id"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute
+                allowedRoles={[ROLES.EMPLOYEE, ROLES.TEAM_LEAD, ROLES.MANAGER, ROLES.ADMIN]}
+                redirectTo="/unauthorized"
+              >
                 <TeamLeadRequestDetails />
               </ProtectedRoute>
             }
@@ -181,8 +188,9 @@ function App() {
           />
           <Route path="/unauthorized" element={<Unauthorized />} />
           <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </Router>
+          </Routes>
+        </Router>
+      </div>
     </AuthProvider>
   );
 }

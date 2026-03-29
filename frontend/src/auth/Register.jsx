@@ -40,6 +40,7 @@ export default function Register() {
         <div className="auth-left-circle auth-left-circle-two" />
         <div className="login-visual-copy">
           <h1>Smart Change Request Portal</h1>
+          <p className="auth-tagline">Smarter requests. Faster decisions.</p>
           <span className="auth-title-line" />
         </div>
       </section>

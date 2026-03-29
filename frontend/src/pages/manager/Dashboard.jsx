@@ -116,11 +116,11 @@ export default function Dashboard() {
       return;
     }
 
-    const headers = 'ID,Employee ID,Title,Category,Status,Due Date,Processed Date\n';
+    const headers = 'ID,Employee ID,Title,Type,Priority,Status,Due Date,Processed Date\n';
     const rows = filtered
       .map(
         (req) =>
-          `${req.id},${req.createdBy},"${req.title}","${req.category || ''}",${req.status},${req.dueDate || ''},${req.actionDate || ''}`
+          `${req.id},${req.createdBy},"${req.title}","${req.type || req.category || ''}",${req.priority || ''},${req.status},${req.dueDate || ''},${req.actionDate || ''}`
       )
       .join('\n');
 
@@ -184,7 +184,8 @@ export default function Dashboard() {
                 <tr>
                   <th>Employee</th>
                   <th>Title</th>
-                  <th>Category</th>
+                  <th>Type</th>
+                  <th>Priority</th>
                   <th>Status</th>
                   <th>Due Date</th>
                   <th>Deadline</th>
@@ -194,7 +195,7 @@ export default function Dashboard() {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan="7">
+                    <td colSpan="8">
                       <EmptyState
                         title="No matching requests"
                         description="Adjust the search or category filter to find what you need, or wait for more workflow activity."
@@ -207,7 +208,8 @@ export default function Dashboard() {
                     <tr key={req.id} className={isOverdue(req) ? 'overdue' : ''}>
                       <td>{req.createdBy}</td>
                       <td>{req.title}</td>
-                      <td>{req.category || '-'}</td>
+                      <td>{req.type || req.category || '-'}</td>
+                      <td>{req.priority || '-'}</td>
                       <td>{isOverdue(req) ? <StatusBadge status={req.status} overdue /> : <StatusBadge status={req.status} />}</td>
                       <td>{req.due_date || req.dueDate || '-'}</td>
                       <td><DeadlineBadge status={req.deadline_status} /></td>
@@ -231,7 +233,8 @@ export default function Dashboard() {
             <h3>Request Review</h3>
             <p><strong>Employee ID:</strong> {selected.createdBy}</p>
             <p><strong>Title:</strong> {selected.title}</p>
-            <p><strong>Category:</strong> {selected.category || '-'}</p>
+            <p><strong>Type:</strong> {selected.type || selected.category || '-'}</p>
+            <p><strong>Priority:</strong> {selected.priority || '-'}</p>
             <p><strong>Description:</strong> {selected.description}</p>
             <p><strong>Attachment:</strong> {selected.attachment || 'None'}</p>
             <ApprovalFlowTimeline requestId={selected.id} onFlowLoaded={setSelectedFlow} />

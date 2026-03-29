@@ -4,6 +4,7 @@ const copilotController = require('../controllers/copilotController');
 
 const router = express.Router();
 
-router.get('/copilot', authMiddleware, copilotController.getCopilotDashboard);
+router.get('/dashboard/copilot', authMiddleware, copilotController.getCopilotDashboard);
+router.post('/copilot/ask', authMiddleware, copilotController.askCopilot);
 
 module.exports = router;

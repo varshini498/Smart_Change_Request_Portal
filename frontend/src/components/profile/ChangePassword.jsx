@@ -13,7 +13,7 @@ export default function ChangePassword({
           {processing ? 'Updating...' : 'Update Password'}
         </button>
       </div>
-      <div style={{ padding: 16 }}>
+      <div className="profile-card-body">
         <div className="field">
           <label>Current Password *</label>
           <input

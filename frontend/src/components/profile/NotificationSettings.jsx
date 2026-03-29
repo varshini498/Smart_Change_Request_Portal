@@ -20,7 +20,7 @@ export default function NotificationSettings({
           {processing ? 'Saving...' : 'Save Preferences'}
         </button>
       </div>
-      <div style={{ padding: 16 }}>
+      <div className="profile-card-body">
         {rows.map(([label, key]) => (
           <label
             key={key}
