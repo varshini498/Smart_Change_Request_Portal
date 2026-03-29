@@ -1,10 +1,10 @@
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
-const db = require('../config/db');
+const { query } = require('../config/db');
 const { normalizeRole, toDisplayRole } = require('../utils/roles');
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret_change_me';
 
-const verifyToken = function(req, res, next) {
+const verifyToken = async function(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ message: 'Unauthorized' });
 
@@ -14,9 +14,11 @@ const verifyToken = function(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     console.log('Decoded user:', decoded);
-    const user = db
-      .prepare('SELECT id, name, email, role, roll_no, is_active FROM users WHERE id = ?')
-      .get(decoded.id);
+    const userResult = await query(
+      'SELECT id, name, email, role, roll_no, is_active FROM users WHERE id = $1',
+      [decoded.id]
+    );
+    const user = userResult.rows[0];
 
     if (!user) {
       return res.status(401).json({ message: 'Session invalid. Please login again.' });

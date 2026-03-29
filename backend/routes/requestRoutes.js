@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../config/db');
+const { query } = require('../config/db');
 const authMiddleware = require('../middleware/authMiddleware');
 const { isEmployee, isAdmin } = require('../middleware/roleMiddleware');
 const { ROLE_KEYS, normalizeRole, toDisplayRole, hasRole } = require('../utils/roles');
@@ -95,42 +96,45 @@ const normalizeApprovalAction = (value) =>
     .toUpperCase()
     .replace(/\s+/g, '_');
 
-const addAuditLog = ({ requestId, action, actorId, actorRole, comment = null }) => {
-  db.prepare(
-    `INSERT INTO audit_logs (requestId, action, actorId, actorRole, comment, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(requestId, action, actorId, actorRole, comment, new Date().toISOString());
-};
-
-const saveRequestVersionSnapshot = ({ request, updatedBy }) => {
-  if (!request?.id) return;
-  const currentVersion = Number(request.version) > 0 ? Number(request.version) : 1;
-  db.prepare(
-    `INSERT INTO request_versions
-     (request_id, version, title, description, attachment_url, updated_by, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    request.id,
-    currentVersion,
-    request.title || null,
-    request.description || null,
-    request.attachment || null,
-    updatedBy || null,
-    new Date().toISOString()
+const addAuditLog = async ({ requestId, action, actorId, actorRole, comment = null }) => {
+  await query(
+    `INSERT INTO audit_logs ("requestId", action, "actorId", "actorRole", comment, "createdAt")
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [requestId, action, actorId, actorRole, comment, new Date().toISOString()]
   );
 };
 
-const notifyRoleUsers = (roleName, templateKey, meta) => {
-  const users = db.prepare('SELECT id, role FROM users').all()
-    .filter((x) => hasRole(x.role, roleName))
-    .map((x) => x.id);
+const saveRequestVersionSnapshot = async ({ request, updatedBy }) => {
+  if (!request?.id) return;
+  const currentVersion = Number(request.version) > 0 ? Number(request.version) : 1;
+  await query(
+    `INSERT INTO request_versions
+     (request_id, version, title, description, attachment_url, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      request.id,
+      currentVersion,
+      request.title || null,
+      request.description || null,
+      request.attachment || null,
+      updatedBy || null,
+      new Date().toISOString(),
+    ]
+  );
+};
+
+const notifyRoleUsers = async (roleName, templateKey, meta) => {
+  const result = await query('SELECT id, role FROM users');
+  const users = result.rows.filter((x) => hasRole(x.role, roleName)).map((x) => x.id);
   if (!users.length) return;
-  notificationService.createBulkNotifications(users, templateKey, meta);
+  await notificationService.createBulkNotifications(users, templateKey, meta);
 };
 
 const notifyUser = (userId, templateKey, meta) => {
   if (!userId) return;
-  notificationService.createBulkNotifications([userId], templateKey, meta);
+  notificationService.createBulkNotifications([userId], templateKey, meta).catch((error) => {
+    console.error('Notification dispatch failed:', error.message);
+  });
 };
 
 const mapRequest = (request) => {
@@ -150,13 +154,21 @@ const mapRequest = (request) => {
   };
 };
 
-const getNextRequestNumber = (userId) => {
-  const row = db.prepare(
+const mapRequestRow = (request) => mapRequest({
+  ...request,
+  dateCreated: request.dateCreated || request.created_at || request.createdat || null,
+  dueDate: request.dueDate || request.due_date || request.duedate || null,
+  createdBy: request.createdBy || request.created_by || request.createdby || null,
+});
+
+const getNextRequestNumber = async (userId) => {
+  const result = await query(
     `SELECT MAX(COALESCE(request_number, 0)) AS max_request_number
      FROM requests
-     WHERE COALESCE(created_by, createdBy) = ?`
-  ).get(userId);
-  return Number(row?.max_request_number || 0) + 1;
+     WHERE COALESCE(created_by, "createdBy") = $1`,
+    [userId]
+  );
+  return Number(result.rows[0]?.max_request_number || 0) + 1;
 };
 
 const getDefaultPriority = () => systemConfigService.getString('default_priority') || 'Medium';
@@ -174,21 +186,22 @@ const resolveDueDate = (value) => {
   return calculateDefaultDueDate();
 };
 
-const getTodaySubmittedCount = (userId, excludeRequestId = null) => {
-  const row = db.prepare(
+const getTodaySubmittedCount = async (userId, excludeRequestId = null) => {
+  const result = await query(
     `SELECT COUNT(*) AS count
      FROM requests
-     WHERE COALESCE(created_by, createdBy) = ?
-       AND (? IS NULL OR id <> ?)
+     WHERE COALESCE(created_by, "createdBy") = $1
+       AND ($2::INTEGER IS NULL OR id <> $2)
        AND UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) <> 'DRAFT'
-       AND date(COALESCE(submitted_at, created_at, dateCreated), 'localtime') = date('now', 'localtime')`
-  ).get(userId, excludeRequestId, excludeRequestId);
-  return Number(row?.count || 0);
+       AND CAST(COALESCE(submitted_at, created_at, "dateCreated") AS DATE) = CURRENT_DATE`,
+    [userId, excludeRequestId]
+  );
+  return Number(result.rows[0]?.count || 0);
 };
 
-const validateDailyRequestLimit = (userId, excludeRequestId = null) => {
+const validateDailyRequestLimit = async (userId, excludeRequestId = null) => {
   const maxRequestsPerDay = systemConfigService.getNumber('max_requests_per_day');
-  const todayCount = getTodaySubmittedCount(userId, excludeRequestId);
+  const todayCount = await getTodaySubmittedCount(userId, excludeRequestId);
   if (todayCount >= maxRequestsPerDay) {
     return {
       ok: false,
@@ -204,39 +217,41 @@ const canAccessRequest = (request, user) => {
   return isOwner || isPrivileged;
 };
 
-const getApprovalLevelId = (levelName) => {
-  const row = db
-    .prepare('SELECT id, role_name AS roleName FROM approval_levels WHERE is_active = 1 ORDER BY level_number ASC')
-    .all()
-    .find((x) => normalizeRole(x.roleName) === normalizeRole(levelName));
+const getApprovalLevelId = async (levelName) => {
+  const result = await query(
+    'SELECT id, role_name AS "roleName" FROM approval_levels WHERE is_active = 1 ORDER BY level_number ASC'
+  );
+  const row = result.rows.find((x) => normalizeRole(x.roleName) === normalizeRole(levelName));
   return row?.id || null;
 };
 
-const buildApprovalStatus = (requestId, user) => {
-  const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
+const buildApprovalStatus = async (requestId, user) => {
+  const requestResult = await query('SELECT * FROM requests WHERE id = $1', [requestId]);
+  const request = requestResult.rows[0];
   if (!request) return { error: { code: 404, message: 'Request not found' } };
   if (!canAccessRequest(request, user)) return { error: { code: 403, message: 'Forbidden' } };
 
   const creatorId = getRequestCreatorId(request);
-  const creator = db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(creatorId);
+  const creatorResult = await query('SELECT id, name, role FROM users WHERE id = $1', [creatorId]);
+  const creator = creatorResult.rows[0];
 
-  const actionRows = db
-    .prepare(
-      `SELECT
-         ra.id,
-         COALESCE(ra.level_name, al.role_name) AS levelName,
-         COALESCE(ra.action, ra.status) AS action,
-         ra.comment,
-         ra.timestamp,
-         ra.approved_by AS approvedBy,
-         COALESCE(u.name, 'Unknown User') AS approverName
-       FROM request_approvals ra
-       LEFT JOIN approval_levels al ON al.id = ra.approval_level_id
-       LEFT JOIN users u ON u.id = ra.approved_by
-       WHERE ra.request_id = ?
-       ORDER BY datetime(COALESCE(ra.timestamp, '1970-01-01T00:00:00.000Z')) ASC, ra.id ASC`
-    )
-    .all(requestId);
+  const actionRowsResult = await query(
+    `SELECT
+       ra.id,
+       COALESCE(ra.level_name, al.role_name) AS "levelName",
+       COALESCE(ra.action, ra.status) AS action,
+       ra.comment,
+       ra.timestamp,
+       ra.approved_by AS "approvedBy",
+       COALESCE(u.name, 'Unknown User') AS "approverName"
+     FROM request_approvals ra
+     LEFT JOIN approval_levels al ON al.id = ra.approval_level_id
+     LEFT JOIN users u ON u.id = ra.approved_by
+     WHERE ra.request_id = $1
+     ORDER BY CAST(COALESCE(ra.timestamp, '1970-01-01T00:00:00.000Z') AS TIMESTAMP) ASC, ra.id ASC`,
+    [requestId]
+  );
+  const actionRows = actionRowsResult.rows;
 
   const latestByLevel = new Map();
   for (const row of actionRows) {
@@ -336,25 +351,18 @@ const buildApprovalStatus = (requestId, user) => {
   };
 };
 
-const insertApprovalAction = ({ requestId, levelName, approvedBy, action, comment, timestamp }) => {
-  const approvalLevelId = getApprovalLevelId(levelName);
-  db.prepare(
+const insertApprovalAction = async ({ requestId, levelName, approvedBy, action, comment, timestamp }) => {
+  const approvalLevelId = await getApprovalLevelId(levelName);
+  await query(
     `INSERT INTO request_approvals (request_id, approval_level_id, level_name, approved_by, status, action, comment, timestamp)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    requestId,
-    approvalLevelId || -1,
-    levelName,
-    approvedBy,
-    action,
-    action,
-    comment,
-    timestamp
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [requestId, approvalLevelId || -1, levelName, approvedBy, action, action, comment, timestamp]
   );
 };
 
-const processApprovalAction = ({ requestId, actor, action, comment }) => {
-  const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
+const processApprovalAction = async ({ requestId, actor, action, comment }) => {
+  const requestResult = await query('SELECT * FROM requests WHERE id = $1', [requestId]);
+  const request = requestResult.rows[0];
   if (!request) return { error: { code: 404, message: 'Request not found' } };
 
   const status = getRequestStatus(request);
@@ -380,7 +388,7 @@ const processApprovalAction = ({ requestId, actor, action, comment }) => {
   const creatorId = getRequestCreatorId(request);
 
   if (action === 'reject') {
-    insertApprovalAction({
+    await insertApprovalAction({
       requestId,
       levelName: currentLevel,
       approvedBy: actor.id,
@@ -389,27 +397,28 @@ const processApprovalAction = ({ requestId, actor, action, comment }) => {
       timestamp: now,
     });
 
-    db.prepare(
+    await query(
       `UPDATE requests
-       SET status = ?,
-           overall_status = ?,
+       SET status = $1,
+           overall_status = $2,
            current_level = NULL,
-           completed_at = ?,
-           comment = ?,
-           actionBy = ?,
-           actionDate = ?
-       WHERE id = ?`
-    ).run(
-      WORKFLOW_STATUS.REJECTED,
-      WORKFLOW_STATUS.REJECTED,
-      now,
-      trimmed,
-      actor.id,
-      now,
-      requestId
+           completed_at = $3,
+           comment = $4,
+           "actionBy" = $5,
+           "actionDate" = $6
+       WHERE id = $7`,
+      [
+        WORKFLOW_STATUS.REJECTED,
+        WORKFLOW_STATUS.REJECTED,
+        now,
+        trimmed,
+        actor.id,
+        now,
+        requestId,
+      ]
     );
 
-    addAuditLog({
+    await addAuditLog({
       requestId,
       action: `Rejected at ${currentLevel}`,
       actorId: actor.id,
@@ -435,7 +444,7 @@ const processApprovalAction = ({ requestId, actor, action, comment }) => {
     };
   }
 
-  insertApprovalAction({
+  await insertApprovalAction({
     requestId,
     levelName: currentLevel,
     approvedBy: actor.id,
@@ -448,19 +457,20 @@ const processApprovalAction = ({ requestId, actor, action, comment }) => {
   const nextLevel = FIXED_APPROVAL_CHAIN[currentIndex + 1] || null;
 
   if (nextLevel) {
-    db.prepare(
+    await query(
       `UPDATE requests
-       SET status = ?,
-           overall_status = ?,
-           current_level = ?,
+       SET status = $1,
+           overall_status = $2,
+           current_level = $3,
            completed_at = NULL,
-           comment = ?,
-           actionBy = ?,
-           actionDate = ?
-       WHERE id = ?`
-    ).run(WORKFLOW_STATUS.PENDING, WORKFLOW_STATUS.PENDING, LEVEL_BY_ROLE[nextLevel], trimmed, actor.id, now, requestId);
+           comment = $4,
+           "actionBy" = $5,
+           "actionDate" = $6
+       WHERE id = $7`,
+      [WORKFLOW_STATUS.PENDING, WORKFLOW_STATUS.PENDING, LEVEL_BY_ROLE[nextLevel], trimmed, actor.id, now, requestId]
+    );
 
-    addAuditLog({
+    await addAuditLog({
       requestId,
       action: `Approved at ${currentLevel}. Moved to ${nextLevel}`,
       actorId: actor.id,
@@ -492,19 +502,20 @@ const processApprovalAction = ({ requestId, actor, action, comment }) => {
     };
   }
 
-  db.prepare(
+  await query(
     `UPDATE requests
-     SET status = ?,
-         overall_status = ?,
+     SET status = $1,
+         overall_status = $2,
          current_level = NULL,
-         completed_at = ?,
-         comment = ?,
-         actionBy = ?,
-         actionDate = ?
-     WHERE id = ?`
-  ).run(WORKFLOW_STATUS.FULLY_APPROVED, WORKFLOW_STATUS.FULLY_APPROVED, now, trimmed, actor.id, now, requestId);
+         completed_at = $3,
+         comment = $4,
+         "actionBy" = $5,
+         "actionDate" = $6
+     WHERE id = $7`,
+    [WORKFLOW_STATUS.FULLY_APPROVED, WORKFLOW_STATUS.FULLY_APPROVED, now, trimmed, actor.id, now, requestId]
+  );
 
-  addAuditLog({
+  await addAuditLog({
     requestId,
     action: WORKFLOW_STATUS.FULLY_APPROVED,
     actorId: actor.id,
@@ -530,18 +541,30 @@ const processApprovalAction = ({ requestId, actor, action, comment }) => {
   };
 };
 
-const REQUEST_COLUMNS = new Set(
-  db.prepare("PRAGMA table_info(requests);").all().map((col) => col.name)
-);
+let requestColumnsCache = null;
+
+const getRequestColumns = async () => {
+  if (requestColumnsCache) return requestColumnsCache;
+  const result = await query(
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'requests'`
+  );
+  requestColumnsCache = new Set(result.rows.map((col) => col.column_name));
+  return requestColumnsCache;
+};
 
 const resolveRequestColumn = (preferred, fallback) => {
-  if (REQUEST_COLUMNS.has(preferred)) return preferred;
-  if (fallback && REQUEST_COLUMNS.has(fallback)) return fallback;
+  if (requestColumnsCache?.has(preferred)) return preferred;
+  if (fallback && requestColumnsCache?.has(fallback)) return fallback;
   return null;
 };
 
-const createRequestHandler = (req, res) => {
+const quoteIdentifier = (columnName) => (/^[a-z_][a-z0-9_]*$/.test(columnName) ? columnName : `"${columnName}"`);
+
+const createRequestHandler = async (req, res) => {
   try {
+    const requestColumns = await getRequestColumns();
     const { title, description, dueDate, due_date, type, priority } = req.body || {};
     const safeTitle = String(title || '').trim();
     const safeDescription = String(description || '').trim();
@@ -555,7 +578,7 @@ const createRequestHandler = (req, res) => {
       });
     }
 
-    const dailyLimitCheck = validateDailyRequestLimit(req.user.id);
+    const dailyLimitCheck = await validateDailyRequestLimit(req.user.id);
     if (!dailyLimitCheck.ok) {
       return res.status(400).json({
         success: false,
@@ -563,17 +586,15 @@ const createRequestHandler = (req, res) => {
       });
     }
 
-    const hasCreatedBy = REQUEST_COLUMNS.has('createdBy');
-    const hasCreatedBySnake = REQUEST_COLUMNS.has('created_by');
+    const hasCreatedBy = requestColumns.has('createdBy');
+    const hasCreatedBySnake = requestColumns.has('created_by');
     const createdByColumn = resolveRequestColumn('created_by', 'createdBy');
-    const hasCreatedAt = REQUEST_COLUMNS.has('created_at');
-    const hasCreatedAtLegacy = REQUEST_COLUMNS.has('dateCreated');
     const createdAtColumn = resolveRequestColumn('created_at', 'dateCreated');
     const requiredMissing = [];
-    if (!REQUEST_COLUMNS.has('title')) requiredMissing.push('title');
-    if (!REQUEST_COLUMNS.has('description')) requiredMissing.push('description');
-    if (!REQUEST_COLUMNS.has('status')) requiredMissing.push('status');
-    if (!REQUEST_COLUMNS.has('current_level')) requiredMissing.push('current_level');
+    if (!requestColumns.has('title')) requiredMissing.push('title');
+    if (!requestColumns.has('description')) requiredMissing.push('description');
+    if (!requestColumns.has('status')) requiredMissing.push('status');
+    if (!requestColumns.has('current_level')) requiredMissing.push('current_level');
     if (!createdByColumn) requiredMissing.push('created_by');
     if (!createdAtColumn) requiredMissing.push('created_at');
 
@@ -585,81 +606,89 @@ const createRequestHandler = (req, res) => {
     }
 
     const createdAt = new Date().toISOString();
-    const requestNumber = getNextRequestNumber(req.user.id);
+    const requestNumber = await getNextRequestNumber(req.user.id);
     const insertColumns = ['title', 'description'];
 
     if (hasCreatedBySnake) insertColumns.push('created_by');
     if (hasCreatedBy && !insertColumns.includes('createdBy')) insertColumns.push('createdBy');
-    if (REQUEST_COLUMNS.has('request_number')) insertColumns.push('request_number');
+    if (requestColumns.has('request_number')) insertColumns.push('request_number');
 
     insertColumns.push('status', 'current_level');
-    if (REQUEST_COLUMNS.has('type')) insertColumns.push('type');
-    if (REQUEST_COLUMNS.has('priority')) insertColumns.push('priority');
-    if (REQUEST_COLUMNS.has('category')) insertColumns.push('category');
+    if (requestColumns.has('type')) insertColumns.push('type');
+    if (requestColumns.has('priority')) insertColumns.push('priority');
+    if (requestColumns.has('category')) insertColumns.push('category');
 
     const finalDueDate = resolveDueDate(due_date || dueDate || null);
-    const hasDueDateSnake = REQUEST_COLUMNS.has('due_date');
-    const hasDueDateLegacy = REQUEST_COLUMNS.has('dueDate');
+    const hasDueDateSnake = requestColumns.has('due_date');
+    const hasDueDateLegacy = requestColumns.has('dueDate');
     if (hasDueDateSnake) insertColumns.push('due_date');
     if (hasDueDateLegacy && !insertColumns.includes('dueDate')) insertColumns.push('dueDate');
 
-    if (hasCreatedAt) insertColumns.push('created_at');
-    if (hasCreatedAtLegacy && !insertColumns.includes('dateCreated')) insertColumns.push('dateCreated');
-    if (REQUEST_COLUMNS.has('submitted_at')) insertColumns.push('submitted_at');
-    if (REQUEST_COLUMNS.has('version')) insertColumns.push('version');
-    const placeholders = insertColumns.map(() => '?').join(', ');
-
-    const stmt = db.prepare(
-      `INSERT INTO requests (${insertColumns.join(', ')}) VALUES (${placeholders})`
-    );
+    if (requestColumns.has('created_at')) insertColumns.push('created_at');
+    if (requestColumns.has('dateCreated') && !insertColumns.includes('dateCreated')) insertColumns.push('dateCreated');
+    if (requestColumns.has('submitted_at')) insertColumns.push('submitted_at');
+    if (requestColumns.has('version')) insertColumns.push('version');
 
     const values = [safeTitle, safeDescription];
 
     if (hasCreatedBySnake) values.push(req.user.id);
     if (hasCreatedBy) values.push(req.user.id);
-    if (REQUEST_COLUMNS.has('request_number')) values.push(requestNumber);
+    if (requestColumns.has('request_number')) values.push(requestNumber);
 
     values.push(WORKFLOW_STATUS.PENDING, 1);
-    if (REQUEST_COLUMNS.has('type')) values.push(safeType);
-    if (REQUEST_COLUMNS.has('priority')) values.push(safePriority);
-    if (REQUEST_COLUMNS.has('category')) values.push(safeType);
+    if (requestColumns.has('type')) values.push(safeType);
+    if (requestColumns.has('priority')) values.push(safePriority);
+    if (requestColumns.has('category')) values.push(safeType);
 
     if (hasDueDateSnake) values.push(finalDueDate);
     if (hasDueDateLegacy) values.push(finalDueDate);
 
-    if (hasCreatedAt) values.push(createdAt);
-    if (hasCreatedAtLegacy) values.push(createdAt);
-    if (REQUEST_COLUMNS.has('submitted_at')) values.push(createdAt);
-    if (REQUEST_COLUMNS.has('version')) values.push(1);
+    if (requestColumns.has('created_at')) values.push(createdAt);
+    if (requestColumns.has('dateCreated')) values.push(createdAt);
+    if (requestColumns.has('submitted_at')) values.push(createdAt);
+    if (requestColumns.has('version')) values.push(1);
 
-    const info = stmt.run(...values);
+    const placeholders = insertColumns.map((_, index) => `$${index + 1}`).join(', ');
+    const insertSql = `INSERT INTO requests (${insertColumns.map(quoteIdentifier).join(', ')}) VALUES (${placeholders}) RETURNING id`;
+    const insertResult = await query(insertSql, values);
+    const requestId = insertResult.rows[0].id;
 
-    const inserted = db
-      .prepare(
-        `SELECT id, COALESCE(request_number, id) AS request_number, status, current_level, type, priority, ${createdAtColumn} AS created_at, COALESCE(due_date, dueDate) AS due_date
-         FROM requests
-         WHERE id = ?`
-      )
-      .get(info.lastInsertRowid);
+    const insertedResult = await query(
+      `SELECT
+         id,
+         COALESCE(request_number, id) AS request_number,
+         status,
+         current_level,
+         type,
+         priority,
+         COALESCE(created_at, "dateCreated") AS created_at,
+         COALESCE(due_date, "dueDate") AS due_date
+       FROM requests
+       WHERE id = $1`,
+      [requestId]
+    );
+    const inserted = insertedResult.rows[0];
 
     console.log('[REQUEST CREATED]:', inserted);
 
-    addAuditLog({
-      requestId: info.lastInsertRowid,
+    await addAuditLog({
+      requestId,
       action: 'Created',
       actorId: req.user.id,
       actorRole: req.user.role,
     });
 
     notifyRoleUsers(ROLE_KEYS.TEAM_LEAD, 'request_created', {
-      requestId: info.lastInsertRowid,
+      requestId,
       title: safeTitle,
       createdBy: req.user.id,
       currentLevel: ROLE_KEYS.TEAM_LEAD,
+    }).catch((error) => {
+      console.error('Notification dispatch failed:', error.message);
     });
 
     notifyUser(req.user.id, 'request_submitted', {
-      requestId: info.lastInsertRowid,
+      requestId,
       title: safeTitle,
     });
 
@@ -682,8 +711,9 @@ const createRequestHandler = (req, res) => {
 router.post('/create', authMiddleware, isEmployee, createRequestHandler);
 router.post('/', authMiddleware, isEmployee, createRequestHandler);
 
-router.post('/draft', authMiddleware, isEmployee, (req, res) => {
+router.post('/draft', authMiddleware, isEmployee, async (req, res) => {
   try {
+    await getRequestColumns();
     const payload = req.body || {};
     const title = String(payload.title || '').trim();
     const description = String(payload.description || '').trim();
@@ -692,34 +722,36 @@ router.post('/draft', authMiddleware, isEmployee, (req, res) => {
     const attachment = payload.attachment ?? null;
     const nextDueDate = resolveDueDate(payload.due_date ?? payload.dueDate ?? payload.implementationDate ?? null);
     const now = new Date().toISOString();
-    const requestNumber = getNextRequestNumber(req.user.id);
+    const requestNumber = await getNextRequestNumber(req.user.id);
 
-    const stmt = db.prepare(
+    const insertResult = await query(
       `INSERT INTO requests
-       (title, description, created_by, createdBy, request_number, status, overall_status, current_level, type, priority, category, attachment, due_date, dueDate, created_at, dateCreated, version)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (title, description, created_by, "createdBy", request_number, status, overall_status, current_level, type, priority, category, attachment, due_date, "dueDate", created_at, "dateCreated", version)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       RETURNING id`,
+      [
+        title || 'Untitled Draft',
+        description || '',
+        req.user.id,
+        req.user.id,
+        requestNumber,
+        WORKFLOW_STATUS.DRAFT,
+        WORKFLOW_STATUS.DRAFT,
+        requestType || 'Others',
+        priority || 'Medium',
+        requestType || 'Others',
+        attachment,
+        nextDueDate,
+        nextDueDate,
+        now,
+        now,
+        1,
+      ]
     );
-    const info = stmt.run(
-      title || 'Untitled Draft',
-      description || '',
-      req.user.id,
-      req.user.id,
-      requestNumber,
-      WORKFLOW_STATUS.DRAFT,
-      WORKFLOW_STATUS.DRAFT,
-      requestType || 'Others',
-      priority || 'Medium',
-      requestType || 'Others',
-      attachment,
-      nextDueDate,
-      nextDueDate,
-      now,
-      now,
-      1
-    );
+    const requestId = insertResult.rows[0].id;
 
-    addAuditLog({
-      requestId: info.lastInsertRowid,
+    await addAuditLog({
+      requestId,
       action: 'Draft saved',
       actorId: req.user.id,
       actorRole: req.user.role,
@@ -728,7 +760,7 @@ router.post('/draft', authMiddleware, isEmployee, (req, res) => {
     return res.status(201).json({
       success: true,
       data: {
-        id: info.lastInsertRowid,
+        id: requestId,
         request_number: requestNumber,
         type: requestType || 'Others',
         priority: priority || 'Medium',
@@ -742,18 +774,22 @@ router.post('/draft', authMiddleware, isEmployee, (req, res) => {
   }
 });
 
-router.put('/:id/draft', authMiddleware, isEmployee, (req, res) => {
+router.put('/:id/draft', authMiddleware, isEmployee, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid request id' });
 
-    const existing = db.prepare('SELECT * FROM requests WHERE id = ? AND COALESCE(created_by, createdBy) = ?').get(id, req.user.id);
+    const existingResult = await query(
+      'SELECT * FROM requests WHERE id = $1 AND COALESCE(created_by, "createdBy") = $2',
+      [id, req.user.id]
+    );
+    const existing = existingResult.rows[0];
     if (!existing) return res.status(404).json({ success: false, message: 'Draft not found' });
     if (getRequestStatus(existing) !== WORKFLOW_STATUS.DRAFT) {
       return res.status(400).json({ success: false, message: 'Only draft requests can be updated here' });
     }
 
-    saveRequestVersionSnapshot({ request: existing, updatedBy: req.user.id });
+    await saveRequestVersionSnapshot({ request: existing, updatedBy: req.user.id });
 
     const payload = req.body || {};
     const nextTitle = String(payload.title ?? existing.title ?? '').trim();
@@ -763,13 +799,14 @@ router.put('/:id/draft', authMiddleware, isEmployee, (req, res) => {
     const nextAttachment = payload.attachment ?? existing.attachment ?? null;
     const nextDueDate = payload.due_date ?? payload.dueDate ?? payload.implementationDate ?? existing.due_date ?? existing.dueDate ?? calculateDefaultDueDate();
 
-    db.prepare(
+    await query(
       `UPDATE requests
-       SET title = ?, description = ?, type = ?, priority = ?, category = ?, attachment = ?, due_date = ?, dueDate = ?, version = COALESCE(version, 1) + 1
-       WHERE id = ?`
-    ).run(nextTitle || 'Untitled Draft', nextDescription || '', nextType, nextPriority, nextType, nextAttachment, nextDueDate, nextDueDate, id);
+       SET title = $1, description = $2, type = $3, priority = $4, category = $5, attachment = $6, due_date = $7, "dueDate" = $8, version = COALESCE(version, 1) + 1
+       WHERE id = $9`,
+      [nextTitle || 'Untitled Draft', nextDescription || '', nextType, nextPriority, nextType, nextAttachment, nextDueDate, nextDueDate, id]
+    );
 
-    addAuditLog({
+    await addAuditLog({
       requestId: id,
       action: 'Draft updated',
       actorId: req.user.id,
@@ -783,12 +820,16 @@ router.put('/:id/draft', authMiddleware, isEmployee, (req, res) => {
   }
 });
 
-router.put('/:id/submit', authMiddleware, isEmployee, (req, res) => {
+router.put('/:id/submit', authMiddleware, isEmployee, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid request id' });
 
-    const existing = db.prepare('SELECT * FROM requests WHERE id = ? AND COALESCE(created_by, createdBy) = ?').get(id, req.user.id);
+    const existingResult = await query(
+      'SELECT * FROM requests WHERE id = $1 AND COALESCE(created_by, "createdBy") = $2',
+      [id, req.user.id]
+    );
+    const existing = existingResult.rows[0];
     if (!existing) return res.status(404).json({ success: false, message: 'Request not found' });
 
     const status = getRequestStatus(existing);
@@ -802,7 +843,7 @@ router.put('/:id/submit', authMiddleware, isEmployee, (req, res) => {
       return res.status(400).json({ success: false, message: 'Title and description are required before submit' });
     }
 
-    const dailyLimitCheck = validateDailyRequestLimit(
+    const dailyLimitCheck = await validateDailyRequestLimit(
       req.user.id,
       status === WORKFLOW_STATUS.DRAFT ? null : id
     );
@@ -812,25 +853,26 @@ router.put('/:id/submit', authMiddleware, isEmployee, (req, res) => {
 
     const now = new Date().toISOString();
     const fallbackDueDate = calculateDefaultDueDate();
-    db.prepare(
+    await query(
       `UPDATE requests
-       SET status = ?, overall_status = ?, current_level = ?, submitted_at = ?, completed_at = NULL,
-           priority = COALESCE(NULLIF(priority, ''), ?),
-           due_date = COALESCE(due_date, dueDate, ?),
-           dueDate = COALESCE(dueDate, due_date, ?)
-       WHERE id = ?`
-    ).run(
-      WORKFLOW_STATUS.PENDING,
-      WORKFLOW_STATUS.PENDING,
-      LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD],
-      now,
-      getDefaultPriority(),
-      fallbackDueDate,
-      fallbackDueDate,
-      id
+       SET status = $1, overall_status = $2, current_level = $3, submitted_at = $4, completed_at = NULL,
+           priority = COALESCE(NULLIF(priority, ''), $5),
+           due_date = COALESCE(due_date, "dueDate", $6),
+           "dueDate" = COALESCE("dueDate", due_date, $7)
+       WHERE id = $8`,
+      [
+        WORKFLOW_STATUS.PENDING,
+        WORKFLOW_STATUS.PENDING,
+        LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD],
+        now,
+        getDefaultPriority(),
+        fallbackDueDate,
+        fallbackDueDate,
+        id,
+      ]
     );
 
-    addAuditLog({
+    await addAuditLog({
       requestId: id,
       action: 'Draft submitted',
       actorId: req.user.id,
@@ -842,6 +884,8 @@ router.put('/:id/submit', authMiddleware, isEmployee, (req, res) => {
       title: existing.title,
       createdBy: req.user.id,
       currentLevel: ROLE_KEYS.TEAM_LEAD,
+    }).catch((error) => {
+      console.error('Notification dispatch failed:', error.message);
     });
 
     notifyUser(req.user.id, 'request_submitted', {
@@ -866,21 +910,25 @@ router.put('/:id/submit', authMiddleware, isEmployee, (req, res) => {
   }
 });
 
-router.delete('/:id/draft', authMiddleware, isEmployee, (req, res) => {
+router.delete('/:id/draft', authMiddleware, isEmployee, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid request id' });
 
-    const existing = db.prepare('SELECT * FROM requests WHERE id = ? AND COALESCE(created_by, createdBy) = ?').get(id, req.user.id);
+    const existingResult = await query(
+      'SELECT * FROM requests WHERE id = $1 AND COALESCE(created_by, "createdBy") = $2',
+      [id, req.user.id]
+    );
+    const existing = existingResult.rows[0];
     if (!existing) return res.status(404).json({ success: false, message: 'Draft not found' });
     if (getRequestStatus(existing) !== WORKFLOW_STATUS.DRAFT) {
       return res.status(400).json({ success: false, message: 'Only drafts can be deleted' });
     }
 
-    db.prepare('DELETE FROM request_versions WHERE request_id = ?').run(id);
-    db.prepare('DELETE FROM requests WHERE id = ?').run(id);
+    await query('DELETE FROM request_versions WHERE request_id = $1', [id]);
+    await query('DELETE FROM requests WHERE id = $1', [id]);
 
-    addAuditLog({
+    await addAuditLog({
       requestId: id,
       action: 'Draft deleted',
       actorId: req.user.id,
@@ -894,9 +942,13 @@ router.delete('/:id/draft', authMiddleware, isEmployee, (req, res) => {
   }
 });
 
-router.get('/categories', authMiddleware, (req, res) => {
-  const categories = db.prepare('SELECT id, name FROM categories ORDER BY name ASC').all();
-  return res.json({ success: true, data: categories });
+router.get('/categories', authMiddleware, async (req, res) => {
+  try {
+    const result = await query('SELECT id, name FROM categories ORDER BY name ASC');
+    return res.json({ success: true, data: result.rows });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 router.get('/config', authMiddleware, (req, res) => {
@@ -911,27 +963,35 @@ router.get('/config', authMiddleware, (req, res) => {
   });
 });
 
-router.get('/my', authMiddleware, isEmployee, (req, res) => {
-  const rows = db
-    .prepare('SELECT * FROM requests WHERE COALESCE(created_by, createdBy) = ? ORDER BY dateCreated DESC')
-    .all(req.user.id)
-    .map(mapRequest);
-  return res.json({ requests: rows });
+router.get('/my', authMiddleware, isEmployee, async (req, res) => {
+  try {
+    const result = await query(
+      'SELECT * FROM requests WHERE COALESCE(created_by, "createdBy") = $1 ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC',
+      [req.user.id]
+    );
+    return res.json({ requests: result.rows.map(mapRequestRow) });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
 });
 
 // Employee can edit only before Team Lead approves (locked after Level 1).
-router.put('/:id', authMiddleware, isEmployee, (req, res) => {
+router.put('/:id', authMiddleware, isEmployee, async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
 
-  const existing = db.prepare('SELECT * FROM requests WHERE id = ? AND COALESCE(created_by, createdBy) = ?').get(id, req.user.id);
+  const existingResult = await query(
+    'SELECT * FROM requests WHERE id = $1 AND COALESCE(created_by, "createdBy") = $2',
+    [id, req.user.id]
+  );
+  const existing = existingResult.rows[0];
   if (!existing) return res.status(404).json({ message: 'Request not found' });
 
   if (getRequestStatus(existing) !== WORKFLOW_STATUS.PENDING || getRequestLevel(existing) !== ROLE_KEYS.TEAM_LEAD) {
     return res.status(400).json({ message: 'Request is locked after Level 1 approval' });
   }
 
-  saveRequestVersionSnapshot({ request: existing, updatedBy: req.user.id });
+  await saveRequestVersionSnapshot({ request: existing, updatedBy: req.user.id });
 
   const { title, description, type, priority, dueDate, due_date, category, attachment } = req.body || {};
   const nextTitle = String(title || existing.title).trim();
@@ -946,56 +1006,61 @@ router.put('/:id', authMiddleware, isEmployee, (req, res) => {
     return res.status(400).json({ message: 'Title and description are required' });
   }
 
-  db.prepare(
+  await query(
     `UPDATE requests
-     SET title = ?, description = ?, type = ?, priority = ?, category = ?, attachment = ?, dueDate = ?, due_date = ?, version = COALESCE(version, 1) + 1
-     WHERE id = ?`
-  ).run(nextTitle, nextDescription, nextType, nextPriority, nextType, nextAttachment, nextDueDate, nextDueDate, id);
+     SET title = $1, description = $2, type = $3, priority = $4, category = $5, attachment = $6, "dueDate" = $7, due_date = $8, version = COALESCE(version, 1) + 1
+     WHERE id = $9`,
+    [nextTitle, nextDescription, nextType, nextPriority, nextType, nextAttachment, nextDueDate, nextDueDate, id]
+  );
 
-  addAuditLog({ requestId: id, action: 'Updated', actorId: req.user.id, actorRole: req.user.role });
+  await addAuditLog({ requestId: id, action: 'Updated', actorId: req.user.id, actorRole: req.user.role });
   return res.json({ message: 'Request updated successfully', requestId: id });
 });
 
-router.get('/:id/versions', authMiddleware, (req, res) => {
+router.get('/:id/versions', authMiddleware, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid request id' });
 
-    const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(id);
+    const requestResult = await query('SELECT * FROM requests WHERE id = $1', [id]);
+    const request = requestResult.rows[0];
     if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
     if (!canAccessRequest(request, req.user)) return res.status(403).json({ success: false, message: 'Forbidden' });
 
-    const versions = db
-      .prepare(
-        `SELECT
-           rv.id,
-           rv.request_id,
-           rv.version,
-           rv.title,
-           rv.description,
-           rv.attachment_url,
-           rv.updated_by,
-           COALESCE(u.name, 'Unknown') AS updated_by_name,
-           rv.updated_at
-         FROM request_versions rv
-         LEFT JOIN users u ON u.id = rv.updated_by
-         WHERE rv.request_id = ?
-         ORDER BY rv.version DESC, datetime(rv.updated_at) DESC`
-      )
-      .all(id);
+    const versionsResult = await query(
+      `SELECT
+         rv.id,
+         rv.request_id,
+         rv.version,
+         rv.title,
+         rv.description,
+         rv.attachment_url,
+         rv.updated_by,
+         COALESCE(u.name, 'Unknown') AS updated_by_name,
+         rv.updated_at
+       FROM request_versions rv
+       LEFT JOIN users u ON u.id = rv.updated_by
+       WHERE rv.request_id = $1
+       ORDER BY rv.version DESC, CAST(rv.updated_at AS TIMESTAMP) DESC`,
+      [id]
+    );
 
-    return res.json({ success: true, data: versions });
+    return res.json({ success: true, data: versionsResult.rows });
   } catch (err) {
     console.error('GET REQUEST VERSIONS ERROR:', err);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
 
-const withdrawRequestHandler = (req, res) => {
+const withdrawRequestHandler = async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
 
-  const existing = db.prepare('SELECT * FROM requests WHERE id = ? AND COALESCE(created_by, createdBy) = ?').get(id, req.user.id);
+  const existingResult = await query(
+    'SELECT * FROM requests WHERE id = $1 AND COALESCE(created_by, "createdBy") = $2',
+    [id, req.user.id]
+  );
+  const existing = existingResult.rows[0];
   if (!existing) return res.status(404).json({ message: 'Request not found' });
 
   const status = getRequestStatus(existing);
@@ -1004,18 +1069,21 @@ const withdrawRequestHandler = (req, res) => {
   }
 
   const now = new Date().toISOString();
-  db.prepare(
+  await query(
     `UPDATE requests
-     SET status = ?,
-         overall_status = ?,
+     SET status = $1,
+         overall_status = $2,
          current_level = NULL,
-         completed_at = ?,
-         actionBy = ?,
-         actionDate = ?
-     WHERE id = ?`
-  ).run(WORKFLOW_STATUS.WITHDRAWN, WORKFLOW_STATUS.WITHDRAWN, now, req.user.id, now, id);
-  addAuditLog({ requestId: id, action: 'Withdrawn by Employee', actorId: req.user.id, actorRole: req.user.role });
-  notifyRoleUsers(ROLE_KEYS.TEAM_LEAD, 'request_withdrawn', { requestId: id, title: existing.title });
+         completed_at = $3,
+         "actionBy" = $4,
+         "actionDate" = $5
+     WHERE id = $6`,
+    [WORKFLOW_STATUS.WITHDRAWN, WORKFLOW_STATUS.WITHDRAWN, now, req.user.id, now, id]
+  );
+  await addAuditLog({ requestId: id, action: 'Withdrawn by Employee', actorId: req.user.id, actorRole: req.user.role });
+  notifyRoleUsers(ROLE_KEYS.TEAM_LEAD, 'request_withdrawn', { requestId: id, title: existing.title }).catch((error) => {
+    console.error('Notification dispatch failed:', error.message);
+  });
 
   return res.json({
     success: true,
@@ -1027,69 +1095,81 @@ const withdrawRequestHandler = (req, res) => {
 router.put('/:id/withdraw', authMiddleware, isEmployee, withdrawRequestHandler);
 router.delete('/:id', authMiddleware, isEmployee, withdrawRequestHandler);
 
-router.get('/all', authMiddleware, (req, res) => {
+router.get('/all', authMiddleware, async (req, res) => {
   if (!hasRole(req.user.role, [ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN])) {
     return res.status(403).json({ message: 'Forbidden' });
   }
-  const rows = db.prepare('SELECT * FROM requests ORDER BY dateCreated DESC').all().map(mapRequest);
-  return res.json({ requests: rows });
+  try {
+    const result = await query(
+      'SELECT * FROM requests ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC'
+    );
+    return res.json({ requests: result.rows.map(mapRequestRow) });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
 });
 
-router.get('/pending', authMiddleware, (req, res) => {
+router.get('/pending', authMiddleware, async (req, res) => {
   if (!hasRole(req.user.role, [ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN])) {
     return res.status(403).json({ message: 'Forbidden' });
   }
 
   const level = LEVEL_BY_ROLE[req.user.role];
-  const rows = db
-    .prepare(
+  try {
+    const result = await query(
       `SELECT *
        FROM requests
        WHERE UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) IN ('PENDING', 'ESCALATED')
-         AND (current_level = ? OR UPPER(REPLACE(COALESCE(current_level, ''), ' ', '_')) = ?)
-       ORDER BY dateCreated DESC`
-    )
-    .all(level || -1, req.user.role)
-    .map(mapRequest);
+         AND (current_level = $1 OR UPPER(REPLACE(COALESCE(CAST(current_level AS TEXT), ''), ' ', '_')) = $2)
+       ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC`,
+      [level || -1, req.user.role]
+    );
 
-  return res.json({ requests: rows });
+    return res.json({ requests: result.rows.map(mapRequestRow) });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
 });
 
-router.get('/dashboard/counts', authMiddleware, (req, res) => {
+router.get('/dashboard/counts', authMiddleware, async (req, res) => {
   if (!hasRole(req.user.role, [ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN])) {
     return res.status(403).json({ message: 'Forbidden' });
   }
 
-  const counts = db.prepare(
-    `SELECT
-      COUNT(*) AS total,
-      COUNT(CASE WHEN UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) IN ('PENDING', 'ESCALATED') THEN 1 END) AS pending,
-      COUNT(CASE WHEN UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'FULLY_APPROVED' THEN 1 END) AS approved,
-      COUNT(CASE WHEN UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'REJECTED' THEN 1 END) AS rejected
-     FROM requests`
-  ).get();
+  try {
+    const result = await query(
+      `SELECT
+        COUNT(*) AS total,
+        COUNT(CASE WHEN UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) IN ('PENDING', 'ESCALATED') THEN 1 END) AS pending,
+        COUNT(CASE WHEN UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'FULLY_APPROVED' THEN 1 END) AS approved,
+        COUNT(CASE WHEN UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'REJECTED' THEN 1 END) AS rejected
+       FROM requests`
+    );
 
-  return res.json({ counts });
+    return res.json({ counts: result.rows[0] });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
 });
 
-router.get('/:id', authMiddleware, (req, res) => {
+router.get('/:id', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid request id' });
 
-  const request = db
-    .prepare(
-      `SELECT
-         r.*,
-         COALESCE(r.created_by, r.createdBy) AS employee_id,
-         COALESCE(r.created_at, r.dateCreated) AS created_at,
-         COALESCE(u.name, 'Unknown') AS employee_name,
-         COALESCE(u.email, '') AS employee_email,
-         COALESCE(u.department, 'General') AS employee_department
-       FROM requests r
-       LEFT JOIN users u ON u.id = COALESCE(r.created_by, r.createdBy)
-       WHERE r.id = ?`
-    )
-    .get(id);
+  const requestResult = await query(
+    `SELECT
+       r.*,
+       COALESCE(r.created_by, r."createdBy") AS employee_id,
+       COALESCE(r.created_at, r."dateCreated") AS created_at,
+       COALESCE(u.name, 'Unknown') AS employee_name,
+       COALESCE(u.email, '') AS employee_email,
+       COALESCE(u.department, 'General') AS employee_department
+     FROM requests r
+     LEFT JOIN users u ON u.id = COALESCE(r.created_by, r."createdBy")
+     WHERE r.id = $1`,
+    [id]
+  );
+  const request = requestResult.rows[0];
 
   console.log('User:', req.user);
   console.log('Request:', request);
@@ -1099,22 +1179,22 @@ router.get('/:id', authMiddleware, (req, res) => {
     return res.status(403).json({ success: false, message: 'Unauthorized' });
   }
 
-  const approvalRows = db
-    .prepare(
-      `SELECT
-         COALESCE(ra.level_name, al.role_name) AS role,
-         UPPER(COALESCE(ra.action, ra.status, 'PENDING')) AS status,
-         ra.approved_by AS approved_by,
-         COALESCE(approver.name, '') AS approved_by_name,
-         ra.comment,
-         ra.timestamp
-       FROM request_approvals ra
-       LEFT JOIN approval_levels al ON al.id = ra.approval_level_id
-       LEFT JOIN users approver ON approver.id = ra.approved_by
-       WHERE ra.request_id = ?
-       ORDER BY datetime(COALESCE(ra.timestamp, '1970-01-01T00:00:00.000Z')) ASC, ra.id ASC`
-    )
-    .all(id);
+  const approvalRowsResult = await query(
+    `SELECT
+       COALESCE(ra.level_name, al.role_name) AS role,
+       UPPER(COALESCE(ra.action, ra.status, 'PENDING')) AS status,
+       ra.approved_by AS approved_by,
+       COALESCE(approver.name, '') AS approved_by_name,
+       ra.comment,
+       ra.timestamp
+     FROM request_approvals ra
+     LEFT JOIN approval_levels al ON al.id = ra.approval_level_id
+     LEFT JOIN users approver ON approver.id = ra.approved_by
+     WHERE ra.request_id = $1
+     ORDER BY CAST(COALESCE(ra.timestamp, '1970-01-01T00:00:00.000Z') AS TIMESTAMP) ASC, ra.id ASC`,
+    [id]
+  );
+  const approvalRows = approvalRowsResult.rows;
 
   const workflowRoles = [ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER];
   const latestByRole = new Map();
@@ -1150,22 +1230,22 @@ router.get('/:id', authMiddleware, (req, res) => {
     return { role, status: 'WAITING', approved_by: null, approved_by_name: null, comment: null, timestamp: null };
   });
 
-  const auditLogs = db
-    .prepare(
-      `SELECT
-         a.id,
-         a.action,
-         a.actorId AS user_id,
-         COALESCE(u.name, 'Unknown') AS user_name,
-         a.actorRole AS user_role,
-         a.comment,
-         a.createdAt AS timestamp
-       FROM audit_logs a
-       LEFT JOIN users u ON u.id = a.actorId
-       WHERE a.requestId = ?
-       ORDER BY datetime(a.createdAt) ASC, a.id ASC`
-    )
-    .all(id);
+  const auditLogsResult = await query(
+    `SELECT
+       a.id,
+       a.action,
+       a."actorId" AS user_id,
+       COALESCE(u.name, 'Unknown') AS user_name,
+       a."actorRole" AS user_role,
+       a.comment,
+       a."createdAt" AS timestamp
+     FROM audit_logs a
+     LEFT JOIN users u ON u.id = a."actorId"
+     WHERE a."requestId" = $1
+     ORDER BY CAST(a."createdAt" AS TIMESTAMP) ASC, a.id ASC`,
+    [id]
+  );
+  const auditLogs = auditLogsResult.rows;
 
   return res.json({
     success: true,
@@ -1191,28 +1271,28 @@ router.get('/:id', authMiddleware, (req, res) => {
   });
 });
 
-router.get('/:id/approval-status', authMiddleware, (req, res) => {
+router.get('/:id/approval-status', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
-  const result = buildApprovalStatus(id, req.user);
+  const result = await buildApprovalStatus(id, req.user);
   if (result.error) return res.status(result.error.code).json({ message: result.error.message });
   return res.json(result);
 });
 
 // Backward compatible alias for existing frontend.
-router.get('/:id/approval-flow', authMiddleware, (req, res) => {
+router.get('/:id/approval-flow', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
-  const result = buildApprovalStatus(id, req.user);
+  const result = await buildApprovalStatus(id, req.user);
   if (result.error) return res.status(result.error.code).json({ message: result.error.message });
   return res.json(result);
 });
 
-router.post('/:id/approve', authMiddleware, (req, res) => {
+router.post('/:id/approve', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   const { comment } = req.body || {};
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
-  const result = processApprovalAction({ requestId: id, actor: req.user, action: 'approve', comment });
+  const result = await processApprovalAction({ requestId: id, actor: req.user, action: 'approve', comment });
   if (result.error) return res.status(result.error.code).json({ message: result.error.message });
   return res.json({
     success: true,
@@ -1226,11 +1306,11 @@ router.post('/:id/approve', authMiddleware, (req, res) => {
   });
 });
 
-router.post('/:id/reject', authMiddleware, (req, res) => {
+router.post('/:id/reject', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   const { comment } = req.body || {};
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
-  const result = processApprovalAction({ requestId: id, actor: req.user, action: 'reject', comment });
+  const result = await processApprovalAction({ requestId: id, actor: req.user, action: 'reject', comment });
   if (result.error) return res.status(result.error.code).json({ message: result.error.message });
   return res.json({
     success: true,
@@ -1245,11 +1325,11 @@ router.post('/:id/reject', authMiddleware, (req, res) => {
 });
 
 // Backward compatibility with older frontend verbs/routes.
-router.put('/:id/approve', authMiddleware, (req, res) => {
+router.put('/:id/approve', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   const { comment } = req.body || {};
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
-  const result = processApprovalAction({ requestId: id, actor: req.user, action: 'approve', comment });
+  const result = await processApprovalAction({ requestId: id, actor: req.user, action: 'approve', comment });
   if (result.error) return res.status(result.error.code).json({ message: result.error.message });
   return res.json({
     success: true,
@@ -1263,11 +1343,11 @@ router.put('/:id/approve', authMiddleware, (req, res) => {
   });
 });
 
-router.put('/:id/reject', authMiddleware, (req, res) => {
+router.put('/:id/reject', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   const { comment } = req.body || {};
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
-  const result = processApprovalAction({ requestId: id, actor: req.user, action: 'reject', comment });
+  const result = await processApprovalAction({ requestId: id, actor: req.user, action: 'reject', comment });
   if (result.error) return res.status(result.error.code).json({ message: result.error.message });
   return res.json({
     success: true,
@@ -1282,31 +1362,35 @@ router.put('/:id/reject', authMiddleware, (req, res) => {
 });
 
 // Only Admin can reopen rejected request.
-router.post('/:id/reopen', authMiddleware, isAdmin, (req, res) => {
+router.post('/:id/reopen', authMiddleware, isAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
 
-  const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(id);
+  const requestResult = await query('SELECT * FROM requests WHERE id = $1', [id]);
+  const request = requestResult.rows[0];
   if (!request) return res.status(404).json({ message: 'Request not found' });
   if (getRequestStatus(request) !== WORKFLOW_STATUS.REJECTED) {
     return res.status(400).json({ message: 'Only rejected requests can be reopened' });
   }
 
-  db.prepare('DELETE FROM request_approvals WHERE request_id = ?').run(id);
-  db.prepare(
+  await query('DELETE FROM request_approvals WHERE request_id = $1', [id]);
+  await query(
     `UPDATE requests
-     SET status = ?, overall_status = ?, current_level = ?, completed_at = NULL,
-         comment = NULL, actionBy = ?, actionDate = ?
-     WHERE id = ?`
-  ).run(WORKFLOW_STATUS.PENDING, WORKFLOW_STATUS.PENDING, LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD], req.user.id, new Date().toISOString(), id);
+     SET status = $1, overall_status = $2, current_level = $3, completed_at = NULL,
+         comment = NULL, "actionBy" = $4, "actionDate" = $5
+     WHERE id = $6`,
+    [WORKFLOW_STATUS.PENDING, WORKFLOW_STATUS.PENDING, LEVEL_BY_ROLE[ROLE_KEYS.TEAM_LEAD], req.user.id, new Date().toISOString(), id]
+  );
 
-  addAuditLog({ requestId: id, action: 'Reopened by Admin', actorId: req.user.id, actorRole: req.user.role });
-  notifyRoleUsers(ROLE_KEYS.TEAM_LEAD, 'request_next_level', { requestId: id, title: request.title, nextRole: ROLE_KEYS.TEAM_LEAD });
+  await addAuditLog({ requestId: id, action: 'Reopened by Admin', actorId: req.user.id, actorRole: req.user.role });
+  notifyRoleUsers(ROLE_KEYS.TEAM_LEAD, 'request_next_level', { requestId: id, title: request.title, nextRole: ROLE_KEYS.TEAM_LEAD }).catch((error) => {
+    console.error('Notification dispatch failed:', error.message);
+  });
 
   return res.json({ message: 'Request reopened and moved to Team Lead', requestId: id });
 });
 
-router.post('/:id/comment', authMiddleware, (req, res) => {
+router.post('/:id/comment', authMiddleware, async (req, res) => {
   if (!hasRole(req.user.role, [ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN])) {
     return res.status(403).json({ message: 'Forbidden' });
   }
@@ -1316,15 +1400,18 @@ router.post('/:id/comment', authMiddleware, (req, res) => {
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
   if (!comment || !String(comment).trim()) return res.status(400).json({ message: 'Comment is required' });
 
-  const request = db.prepare('SELECT id, title, createdBy, created_by, status FROM requests WHERE id = ?').get(id);
+  const requestResult = await query('SELECT id, title, "createdBy", created_by, status FROM requests WHERE id = $1', [id]);
+  const request = requestResult.rows[0];
   if (!request) return res.status(404).json({ message: 'Request not found' });
   if (getRequestStatus(request) !== WORKFLOW_STATUS.PENDING) return res.status(400).json({ message: 'Comments can only be added to pending requests' });
 
   const trimmedComment = String(comment).trim();
-  db.prepare(`UPDATE requests SET comment = ?, actionBy = ?, actionDate = ? WHERE id = ?`)
-    .run(trimmedComment, req.user.id, new Date().toISOString(), id);
+  await query(
+    'UPDATE requests SET comment = $1, "actionBy" = $2, "actionDate" = $3 WHERE id = $4',
+    [trimmedComment, req.user.id, new Date().toISOString(), id]
+  );
 
-  addAuditLog({
+  await addAuditLog({
     requestId: id,
     action: 'Commented',
     actorId: req.user.id,
@@ -1342,49 +1429,50 @@ router.post('/:id/comment', authMiddleware, (req, res) => {
   return res.json({ message: 'Comment added', requestId: id });
 });
 
-router.get('/:id/activity', authMiddleware, (req, res) => {
+router.get('/:id/activity', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
 
-  const request = db.prepare('SELECT id, createdBy, created_by FROM requests WHERE id = ?').get(id);
+  const requestResult = await query('SELECT id, "createdBy", created_by FROM requests WHERE id = $1', [id]);
+  const request = requestResult.rows[0];
   if (!request) return res.status(404).json({ message: 'Request not found' });
   if (!canAccessRequest(request, req.user)) return res.status(403).json({ message: 'Forbidden' });
 
-  const activity = db
-    .prepare(
-      `SELECT
-         a.id,
-         a.requestId AS requestId,
-         a.action AS actionType,
-         a.actorId AS userId,
-         COALESCE(u.name, 'Unknown User') AS userName,
-         a.actorRole AS userRole,
-         a.comment AS comment,
-         a.createdAt AS timestamp
-       FROM audit_logs a
-       LEFT JOIN users u ON u.id = a.actorId
-       WHERE a.requestId = ?
-       ORDER BY a.createdAt ASC`
-    )
-    .all(id);
+  const activityResult = await query(
+    `SELECT
+       a.id,
+       a."requestId" AS "requestId",
+       a.action AS "actionType",
+       a."actorId" AS "userId",
+       COALESCE(u.name, 'Unknown User') AS "userName",
+       a."actorRole" AS "userRole",
+       a.comment AS comment,
+       a."createdAt" AS timestamp
+     FROM audit_logs a
+     LEFT JOIN users u ON u.id = a."actorId"
+     WHERE a."requestId" = $1
+     ORDER BY CAST(a."createdAt" AS TIMESTAMP) ASC, a.id ASC`,
+    [id]
+  );
 
-  return res.json({ activity });
+  return res.json({ activity: activityResult.rows });
 });
 
-router.post('/:id/activity', authMiddleware, (req, res) => {
+router.post('/:id/activity', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   const { actionType, comment } = req.body || {};
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
   if (!actionType || !String(actionType).trim()) return res.status(400).json({ message: 'actionType is required' });
 
-  const request = db.prepare('SELECT id, createdBy, created_by, title FROM requests WHERE id = ?').get(id);
+  const requestResult = await query('SELECT id, "createdBy", created_by, title FROM requests WHERE id = $1', [id]);
+  const request = requestResult.rows[0];
   if (!request) return res.status(404).json({ message: 'Request not found' });
   if (!canAccessRequest(request, req.user)) return res.status(403).json({ message: 'Forbidden' });
 
   const finalAction = String(actionType).trim().slice(0, 64);
   const finalComment = comment ? String(comment).trim().slice(0, 1000) : null;
 
-  addAuditLog({ requestId: id, action: finalAction, actorId: req.user.id, actorRole: req.user.role, comment: finalComment });
+  await addAuditLog({ requestId: id, action: finalAction, actorId: req.user.id, actorRole: req.user.role, comment: finalComment });
 
   if (finalAction.toLowerCase() === 'commented' && req.user.id !== getRequestCreatorId(request)) {
     notifyUser(getRequestCreatorId(request), 'request_commented', {
@@ -1398,38 +1486,50 @@ router.post('/:id/activity', authMiddleware, (req, res) => {
   return res.status(201).json({ message: 'Activity logged', requestId: id, actionType: finalAction });
 });
 
-router.get('/:id/audit', authMiddleware, (req, res) => {
+router.get('/:id/audit', authMiddleware, async (req, res) => {
   const id = Number(req.params.id);
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Invalid request id' });
 
-  const request = db.prepare('SELECT id, createdBy, created_by FROM requests WHERE id = ?').get(id);
+  const requestResult = await query('SELECT id, "createdBy", created_by FROM requests WHERE id = $1', [id]);
+  const request = requestResult.rows[0];
   if (!request) return res.status(404).json({ message: 'Request not found' });
   if (!canAccessRequest(request, req.user)) return res.status(403).json({ message: 'Forbidden' });
 
-  const logs = db
-    .prepare(
-      `SELECT id, requestId, action, actorId, actorRole, comment, createdAt
-       FROM audit_logs
-       WHERE requestId = ?
-       ORDER BY createdAt ASC`
-    )
-    .all(id);
+  const logsResult = await query(
+    `SELECT id, "requestId" AS "requestId", action, "actorId" AS "actorId", "actorRole" AS "actorRole", comment, "createdAt" AS "createdAt"
+     FROM audit_logs
+     WHERE "requestId" = $1
+     ORDER BY CAST("createdAt" AS TIMESTAMP) ASC, id ASC`,
+    [id]
+  );
 
-  return res.json({ logs });
+  return res.json({ logs: logsResult.rows });
 });
 
-router.get('/report/csv/download', authMiddleware, (req, res) => {
+router.get('/report/csv/download', authMiddleware, async (req, res) => {
   if (!hasRole(req.user.role, [ROLE_KEYS.TEAM_LEAD, ROLE_KEYS.MANAGER, ROLE_KEYS.ADMIN])) {
     return res.status(403).json({ message: 'Forbidden' });
   }
 
-  const rows = db
-    .prepare(
-      `SELECT id, title, description, status, current_level, COALESCE(created_by, createdBy) AS created_by, priority, category, dateCreated, dueDate, actionBy, actionDate, completed_at
-       FROM requests
-       ORDER BY dateCreated DESC`
-    )
-    .all();
+  const rowsResult = await query(
+    `SELECT
+       id,
+       title,
+       description,
+       status,
+       current_level,
+       COALESCE(created_by, "createdBy") AS created_by,
+       priority,
+       category,
+       "dateCreated" AS "dateCreated",
+       "dueDate" AS "dueDate",
+       "actionBy" AS "actionBy",
+       "actionDate" AS "actionDate",
+       completed_at
+     FROM requests
+     ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC`
+  );
+  const rows = rowsResult.rows;
 
   const header = 'id,title,description,status,current_level,created_by,priority,category,dateCreated,dueDate,actionBy,actionDate,completed_at';
   const escape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
@@ -1440,17 +1540,22 @@ router.get('/report/csv/download', authMiddleware, (req, res) => {
   return res.status(200).send(`${header}\n${body}`);
 });
 
-router.get('/audit/all/logs', authMiddleware, isAdmin, (req, res) => {
-  const logs = db
-    .prepare(
-      `SELECT id, requestId, action, actorId, actorRole, comment, createdAt
-       FROM audit_logs
-       ORDER BY createdAt DESC
-       LIMIT 300`
-    )
-    .all();
+router.get('/audit/all/logs', authMiddleware, isAdmin, async (req, res) => {
+  const logsResult = await query(
+    `SELECT
+       id,
+       "requestId" AS "requestId",
+       action,
+       "actorId" AS "actorId",
+       "actorRole" AS "actorRole",
+       comment,
+       "createdAt" AS "createdAt"
+     FROM audit_logs
+     ORDER BY CAST("createdAt" AS TIMESTAMP) DESC, id DESC
+     LIMIT 300`
+  );
 
-  return res.json({ logs });
+  return res.json({ logs: logsResult.rows });
 });
 
 module.exports = router;

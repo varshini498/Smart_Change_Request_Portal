@@ -74,8 +74,8 @@ const isPendingQuery = (query = '') => {
   );
 };
 
-const getCopilotDashboard = (req, res) => {
-  const payload = copilotService.getCopilotData({
+const getCopilotDashboard = async (req, res) => {
+  const payload = await copilotService.getCopilotData({
     userId: req.user.id,
     role: req.user.role,
   });
@@ -99,7 +99,7 @@ const askCopilot = async (req, res) => {
 
   try {
     const userId = req.user?.id || req.body?.userId;
-    const requests = copilotService.getUserRequests(userId);
+    const requests = await copilotService.getUserRequests(userId);
 
     if (!requests.length) {
       return res.json({
@@ -110,7 +110,7 @@ const askCopilot = async (req, res) => {
     }
 
     if (isRejectionQuery(query)) {
-      const rejectedRequest = copilotService.getLastRejectedRequest(userId);
+      const rejectedRequest = await copilotService.getLastRejectedRequest(userId);
       if (!rejectedRequest) {
         return res.json({
           type: 'text',
@@ -127,7 +127,7 @@ const askCopilot = async (req, res) => {
     }
 
     if (isPendingQuery(query)) {
-      const pendingRequests = copilotService.getPendingRequests(userId);
+      const pendingRequests = await copilotService.getPendingRequests(userId);
       if (!pendingRequests.length) {
         return res.json({
           type: 'text',
@@ -165,7 +165,7 @@ const askCopilot = async (req, res) => {
 
     const titleQuery = extractTitleQuery(query);
     if (titleQuery) {
-      const request = copilotService.getRequestByTitle(titleQuery, userId);
+      const request = await copilotService.getRequestByTitle(titleQuery, userId);
       if (request) {
         return res.json({
           type: 'data',

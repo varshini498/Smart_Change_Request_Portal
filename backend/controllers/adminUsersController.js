@@ -1,5 +1,5 @@
 const bcrypt = require('bcrypt');
-const db = require('../config/db');
+const { query } = require('../config/db');
 const respond = require('../utils/respond');
 const { ROLE_KEYS, normalizeRole } = require('../utils/roles');
 
@@ -16,42 +16,43 @@ exports.createUser = async (req, res) => {
       return respond(res, false, 'Invalid role', 400);
     }
 
-    const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existsResult = await query('SELECT id FROM users WHERE email = $1', [email]);
+    const exists = existsResult.rows[0];
     if (exists) return respond(res, false, 'Email already exists', 400);
 
     const hash = await bcrypt.hash(password, 10);
-    const info = db
-      .prepare(
-        `INSERT INTO users (name, email, password, role, roll_no, department, is_active)
-         VALUES (?, ?, ?, ?, ?, ?, 1)`
-      )
-      .run(
+    const result = await query(
+      `INSERT INTO users (name, email, password, role, roll_no, department, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, 1)
+       RETURNING id`,
+      [
         String(name).trim(),
         String(email).trim(),
         hash,
         normalizedRole,
         roll_no || `EMP${Date.now()}`,
-        department || 'General'
-      );
+        department || 'General',
+      ]
+    );
 
-    return respond(res, true, { id: info.lastInsertRowid });
+    return respond(res, true, { id: result.rows[0].id });
   } catch (err) {
     return respond(res, false, err.message, 500);
   }
 };
 
-exports.getAllUsers = (req, res) => {
+exports.getAllUsers = async (req, res) => {
   try {
-    const rows = db
-      .prepare('SELECT id, name, email, role, roll_no, department, is_active FROM users ORDER BY id DESC')
-      .all();
-    return respond(res, true, rows);
+    const result = await query(
+      'SELECT id, name, email, role, roll_no, department, is_active FROM users ORDER BY id DESC'
+    );
+    return respond(res, true, result.rows);
   } catch (err) {
     return respond(res, false, err.message, 500);
   }
 };
 
-exports.updateUserRole = (req, res) => {
+exports.updateUserRole = async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { role } = req.body || {};
@@ -63,15 +64,15 @@ exports.updateUserRole = (req, res) => {
       return respond(res, false, 'Invalid role', 400);
     }
 
-    const result = db.prepare('UPDATE users SET role = ? WHERE id = ?').run(normalizedRole, id);
-    if (!result.changes) return respond(res, false, 'User not found', 404);
+    const result = await query('UPDATE users SET role = $1 WHERE id = $2', [normalizedRole, id]);
+    if (!result.rowCount) return respond(res, false, 'User not found', 404);
     return respond(res, true, { id, role: normalizedRole });
   } catch (err) {
     return respond(res, false, err.message, 500);
   }
 };
 
-exports.toggleUserStatus = (req, res) => {
+exports.toggleUserStatus = async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { is_active } = req.body || {};
@@ -81,8 +82,8 @@ exports.toggleUserStatus = (req, res) => {
       return respond(res, false, 'Admin cannot deactivate self', 400);
     }
 
-    const result = db.prepare('UPDATE users SET is_active = ? WHERE id = ?').run(is_active ? 1 : 0, id);
-    if (!result.changes) return respond(res, false, 'User not found', 404);
+    const result = await query('UPDATE users SET is_active = $1 WHERE id = $2', [is_active ? 1 : 0, id]);
+    if (!result.rowCount) return respond(res, false, 'User not found', 404);
     return respond(res, true, { id, is_active: !!is_active });
   } catch (err) {
     return respond(res, false, err.message, 500);
@@ -96,22 +97,22 @@ exports.resetPassword = async (req, res) => {
     if (Number.isNaN(id) || !newPassword) return respond(res, false, 'Invalid input', 400);
 
     const hash = await bcrypt.hash(String(newPassword), 10);
-    const result = db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, id);
-    if (!result.changes) return respond(res, false, 'User not found', 404);
+    const result = await query('UPDATE users SET password = $1 WHERE id = $2', [hash, id]);
+    if (!result.rowCount) return respond(res, false, 'User not found', 404);
     return respond(res, true, { id });
   } catch (err) {
     return respond(res, false, err.message, 500);
   }
 };
 
-exports.deleteUser = (req, res) => {
+exports.deleteUser = async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return respond(res, false, 'Invalid user id', 400);
     if (id === req.user.id) return respond(res, false, 'Admin cannot delete self', 400);
 
-    const result = db.prepare('DELETE FROM users WHERE id = ?').run(id);
-    if (!result.changes) return respond(res, false, 'User not found', 404);
+    const result = await query('DELETE FROM users WHERE id = $1', [id]);
+    if (!result.rowCount) return respond(res, false, 'User not found', 404);
     return respond(res, true, { id });
   } catch (err) {
     return respond(res, false, err.message, 500);

@@ -1,9 +1,9 @@
-const db = require("../config/db");
+const { query } = require("../config/db");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 // REGISTER
-exports.register = (req, res) => {
+exports.register = async (req, res) => {
   const { name, roll_no, email, password, role } = req.body;
 
   if (!name || !roll_no || !email || !password || !role) {
@@ -14,35 +14,32 @@ exports.register = (req, res) => {
   const hashedPassword = bcrypt.hashSync(password, 10);
 
   // Insert into users table
-  const sql = "INSERT INTO users (name, roll_no, email, password, role) VALUES (?, ?, ?, ?, ?)";
+  try {
+    const result = await query(
+      "INSERT INTO users (name, roll_no, email, password, role) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+      [name, roll_no, email, hashedPassword, role]
+    );
 
-  db.query(sql, [name, roll_no, email, hashedPassword, role], (err, result) => {
-    if (err) {
-      if (err.code === "ER_DUP_ENTRY") {
-        return res.status(400).json({ message: "Roll no or email already exists" });
-      }
-      return res.status(500).json({ message: err.message });
+    res.status(201).json({ message: "User registered successfully", userId: result.rows[0].id });
+  } catch (err) {
+    if (err.code === "23505") {
+      return res.status(400).json({ message: "Roll no or email already exists" });
     }
-
-    res.status(201).json({ message: "User registered successfully", userId: result.insertId });
-  });
+    return res.status(500).json({ message: err.message });
+  }
 };
 
 // LOGIN
-exports.login = (req, res) => {
+exports.login = async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) return res.status(400).json({ message: "Email and password required" });
 
-  const sql = "SELECT * FROM users WHERE email = ?";
+  try {
+    const result = await query("SELECT * FROM users WHERE email = $1", [email]);
+    if (!result.rows.length) return res.status(400).json({ message: "User not found" });
 
-  db.query(sql, [email], (err, results) => {
-    if (err) return res.status(500).json({ message: err.message });
-
-    if (results.length === 0) return res.status(400).json({ message: "User not found" });
-
-    const user = results[0];
-
+    const user = result.rows[0];
     // Compare password
     const isMatch = bcrypt.compareSync(password, user.password);
     if (!isMatch) return res.status(400).json({ message: "Incorrect password" });
@@ -55,5 +52,7 @@ exports.login = (req, res) => {
     );
 
     res.json({ message: "Login successful", token, role: user.role });
-  });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
+  }
 };

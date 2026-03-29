@@ -1,4 +1,4 @@
-const db = require('../config/db');
+const { query } = require('../config/db');
 
 const SETTING_DEFINITIONS = {
   default_priority: {
@@ -36,23 +36,42 @@ const SETTING_DEFINITIONS = {
   },
 };
 
+const settingsCache = new Map(
+  Object.values(SETTING_DEFINITIONS).map((setting) => [setting.key, setting.defaultValue])
+);
+
 const normalizeBoolean = (value) => {
   const normalized = String(value ?? '').trim().toLowerCase();
   return ['1', 'true', 'yes', 'on'].includes(normalized);
 };
 
-const ensureDefaults = () => {
-  const stmt = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
+const refreshCache = async () => {
+  const result = await query('SELECT key, value FROM settings');
   Object.values(SETTING_DEFINITIONS).forEach((setting) => {
-    stmt.run(setting.key, setting.defaultValue);
+    settingsCache.set(setting.key, setting.defaultValue);
   });
+  result.rows.forEach((row) => {
+    if (SETTING_DEFINITIONS[row.key]) {
+      settingsCache.set(row.key, String(row.value ?? ''));
+    }
+  });
+  return settingsCache;
+};
+
+const ensureDefaults = async () => {
+  for (const setting of Object.values(SETTING_DEFINITIONS)) {
+    await query(
+      'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING',
+      [setting.key, setting.defaultValue]
+    );
+  }
+  await refreshCache();
 };
 
 const getRawValue = (key) => {
-  ensureDefaults();
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
-  if (row?.value !== undefined && row?.value !== null && String(row.value).trim() !== '') {
-    return String(row.value);
+  const cached = settingsCache.get(key);
+  if (cached !== undefined && cached !== null && String(cached).trim() !== '') {
+    return String(cached);
   }
   return SETTING_DEFINITIONS[key]?.defaultValue ?? '';
 };
@@ -67,16 +86,11 @@ const getNumber = (key) => {
 
 const isEnabled = (key) => normalizeBoolean(getRawValue(key));
 
-const getSettingsForPanel = () => {
-  ensureDefaults();
-  const currentRows = db.prepare('SELECT key, value FROM settings').all();
-  const valuesByKey = new Map(currentRows.map((row) => [row.key, String(row.value ?? '')]));
-
-  return Object.values(SETTING_DEFINITIONS).map((definition) => ({
+const getSettingsForPanel = () =>
+  Object.values(SETTING_DEFINITIONS).map((definition) => ({
     ...definition,
-    value: valuesByKey.get(definition.key) ?? definition.defaultValue,
+    value: getRawValue(definition.key),
   }));
-};
 
 const validateSetting = (key, value) => {
   const definition = SETTING_DEFINITIONS[key];
@@ -113,9 +127,14 @@ const validateSetting = (key, value) => {
   return { ok: true, value: String(value ?? '') };
 };
 
+ensureDefaults().catch((error) => {
+  console.error('System configuration cache bootstrap failed:', error.message);
+});
+
 module.exports = {
   SETTING_DEFINITIONS,
   ensureDefaults,
+  refreshCache,
   getString,
   getNumber,
   isEnabled,

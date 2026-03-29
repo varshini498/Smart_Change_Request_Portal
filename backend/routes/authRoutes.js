@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const db = require('../config/db');
+const { query } = require('../config/db');
 const authMiddleware = require('../middleware/authMiddleware');
 const { ROLE_KEYS, normalizeRole, toDisplayRole } = require('../utils/roles');
 require('dotenv').config();
@@ -22,14 +22,17 @@ router.post('/register', async (req, res) => {
   }
 
   try {
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existingUserResult = await query('SELECT id FROM users WHERE email = $1', [email]);
+    const existingUser = existingUserResult.rows[0];
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists.' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    db.prepare('INSERT INTO users (name, email, password, role, roll_no) VALUES (?, ?, ?, ?, ?)')
-      .run(name, email, hashedPassword, normalizedRole, roll_no);
+    await query(
+      'INSERT INTO users (name, email, password, role, roll_no) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [name, email, hashedPassword, normalizedRole, roll_no]
+    );
 
     return res.status(201).json({ message: 'Registration successful!' });
   } catch (err) {
@@ -44,7 +47,8 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const userResult = await query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = userResult.rows[0];
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -89,20 +93,26 @@ router.post('/login', async (req, res) => {
   }
 });
 
-router.get('/me', authMiddleware, (req, res) => {
-  const user = db
-    .prepare('SELECT id, name, email, role, roll_no FROM users WHERE id = ?')
-    .get(req.user.id);
-  if (!user) {
-    return res.status(404).json({ message: 'User not found' });
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const userResult = await query(
+      'SELECT id, name, email, role, roll_no FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    return res.json({
+      user: {
+        ...user,
+        role: normalizeRole(user.role),
+        role_label: toDisplayRole(user.role),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Database error', error: err.message });
   }
-  return res.json({
-    user: {
-      ...user,
-      role: normalizeRole(user.role),
-      role_label: toDisplayRole(user.role),
-    },
-  });
 });
 
 module.exports = router;

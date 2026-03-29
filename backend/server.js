@@ -1,8 +1,10 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const { initPromise } = require('./config/db');
 const app = express();
-require('dotenv').config();
 
 app.use(cors());
 app.use(express.json());
@@ -31,13 +33,21 @@ app.use('/api/users', userRoutes);
 app.use('/api/teamlead', teamLeadRoutes);
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-// SLA escalation scan: every 30 minutes.
-setInterval(() => {
-  try {
-    notificationService.runEscalation();
-  } catch (error) {
-    console.error('Escalation job failed:', error.message);
-  }
-}, 30 * 60 * 1000);
+const startServer = async () => {
+  await initPromise;
+
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+  // SLA escalation scan: every 30 minutes.
+  setInterval(() => {
+    notificationService.runEscalation().catch((error) => {
+      console.error('Escalation job failed:', error.message);
+    });
+  }, 30 * 60 * 1000);
+};
+
+startServer().catch((error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
+});

@@ -1,8 +1,8 @@
-const db = require('../config/db');
+const { query } = require('../config/db');
 const { normalizeRole } = require('../utils/roles');
 
-const getLastRequest = (userId) => {
-  return db.prepare(
+const getLastRequest = async (userId) => {
+  const result = await query(
     `SELECT
        id,
        title,
@@ -11,17 +11,19 @@ const getLastRequest = (userId) => {
        priority,
        category,
        current_level,
-       COALESCE(created_at, dateCreated) AS created_at,
+       COALESCE(created_at, "dateCreated") AS created_at,
        completed_at
      FROM requests
-     WHERE COALESCE(created_by, createdBy) = ?
-     ORDER BY datetime(COALESCE(created_at, dateCreated)) DESC
-     LIMIT 1`
-  ).get(userId);
+     WHERE COALESCE(created_by, "createdBy") = $1
+     ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0];
 };
 
-const getUserRequests = (userId) => {
-  return db.prepare(
+const getUserRequests = async (userId) => {
+  const result = await query(
     `SELECT
        id,
        COALESCE(request_number, id) AS request_number,
@@ -32,20 +34,22 @@ const getUserRequests = (userId) => {
        priority,
        category,
        current_level,
-       COALESCE(created_at, dateCreated) AS created_at,
-       COALESCE(due_date, dueDate) AS due_date,
+       COALESCE(created_at, "dateCreated") AS created_at,
+       COALESCE(due_date, "dueDate") AS due_date,
        completed_at
      FROM requests
-     WHERE COALESCE(created_by, createdBy) = ?
-     ORDER BY datetime(COALESCE(created_at, dateCreated)) DESC, id DESC`
-  ).all(userId);
+     WHERE COALESCE(created_by, "createdBy") = $1
+     ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC, id DESC`,
+    [userId]
+  );
+  return result.rows;
 };
 
-const getRequestByTitle = (title, userId) => {
+const getRequestByTitle = async (title, userId) => {
   const value = String(title || '').trim();
   if (!value) return null;
 
-  return db.prepare(
+  const result = await query(
     `SELECT
        id,
        COALESCE(request_number, id) AS request_number,
@@ -56,19 +60,21 @@ const getRequestByTitle = (title, userId) => {
        priority,
        category,
        current_level,
-       COALESCE(created_at, dateCreated) AS created_at,
-       COALESCE(due_date, dueDate) AS due_date,
+       COALESCE(created_at, "dateCreated") AS created_at,
+       COALESCE(due_date, "dueDate") AS due_date,
        completed_at
      FROM requests
-     WHERE COALESCE(created_by, createdBy) = ?
-       AND LOWER(COALESCE(title, '')) LIKE ?
-     ORDER BY datetime(COALESCE(created_at, dateCreated)) DESC, id DESC
-     LIMIT 1`
-  ).get(userId, `%${value.toLowerCase()}%`) || null;
+     WHERE COALESCE(created_by, "createdBy") = $1
+       AND LOWER(COALESCE(title, '')) LIKE $2
+     ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC, id DESC
+     LIMIT 1`,
+    [userId, `%${value.toLowerCase()}%`]
+  );
+  return result.rows[0] || null;
 };
 
-const getLastRejectedRequest = (userId) => {
-  return db.prepare(
+const getLastRejectedRequest = async (userId) => {
+  const result = await query(
     `SELECT
        id,
        COALESCE(request_number, id) AS request_number,
@@ -77,17 +83,19 @@ const getLastRejectedRequest = (userId) => {
        comment,
        priority,
        category,
-       COALESCE(created_at, dateCreated) AS created_at
+       COALESCE(created_at, "dateCreated") AS created_at
      FROM requests
-     WHERE COALESCE(created_by, createdBy) = ?
+     WHERE COALESCE(created_by, "createdBy") = $1
        AND UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'REJECTED'
-     ORDER BY datetime(COALESCE(created_at, dateCreated)) DESC, id DESC
-     LIMIT 1`
-  ).get(userId) || null;
+     ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC, id DESC
+     LIMIT 1`,
+    [userId]
+  );
+  return result.rows[0] || null;
 };
 
-const getPendingRequests = (userId) => {
-  return db.prepare(
+const getPendingRequests = async (userId) => {
+  const result = await query(
     `SELECT
        id,
        COALESCE(request_number, id) AS request_number,
@@ -95,31 +103,40 @@ const getPendingRequests = (userId) => {
        status,
        priority,
        category,
-       COALESCE(created_at, dateCreated) AS created_at
+       COALESCE(created_at, "dateCreated") AS created_at
      FROM requests
-     WHERE COALESCE(created_by, createdBy) = ?
+     WHERE COALESCE(created_by, "createdBy") = $1
        AND UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'PENDING'
-     ORDER BY datetime(COALESCE(created_at, dateCreated)) DESC, id DESC`
-  ).all(userId);
+     ORDER BY CAST(COALESCE(created_at, "dateCreated") AS TIMESTAMP) DESC, id DESC`,
+    [userId]
+  );
+  return result.rows;
 };
 
-const getCopilotData = ({ userId, role }) => {
+const getCopilotData = async ({ userId, role }) => {
   const roleKey = normalizeRole(role);
-  const pendingCount = db.prepare("SELECT COUNT(*) AS count FROM requests WHERE status = 'Pending'").get().count;
+  const pendingCountResult = await query("SELECT COUNT(*) AS count FROM requests WHERE status = 'Pending'");
+  const pendingCount = Number(pendingCountResult.rows[0]?.count || 0);
 
-  const myPending = roleKey === 'EMPLOYEE'
-    ? db.prepare("SELECT COUNT(*) AS count FROM requests WHERE COALESCE(created_by, createdBy) = ? AND UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'PENDING'").get(userId).count
-    : null;
+  let myPending = null;
+  if (roleKey === 'EMPLOYEE') {
+    const myPendingResult = await query(
+      "SELECT COUNT(*) AS count FROM requests WHERE COALESCE(created_by, \"createdBy\") = $1 AND UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'PENDING'",
+      [userId]
+    );
+    myPending = Number(myPendingResult.rows[0]?.count || 0);
+  }
 
-  const overdueCount = db.prepare(
+  const overdueCountResult = await query(
     `SELECT COUNT(*) AS count
      FROM requests
      WHERE UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'PENDING'
-       AND COALESCE(due_date, dueDate) IS NOT NULL
-       AND datetime(COALESCE(due_date, dueDate)) < datetime('now')`
-  ).get().count;
+       AND COALESCE(due_date, "dueDate") IS NOT NULL
+       AND CAST(COALESCE(due_date, "dueDate") AS TIMESTAMP) < NOW()`
+  );
+  const overdueCount = Number(overdueCountResult.rows[0]?.count || 0);
 
-  const topBlockers = db.prepare(
+  const topBlockersResult = await query(
     `SELECT comment, COUNT(*) AS count
      FROM requests
      WHERE UPPER(REPLACE(COALESCE(status, ''), ' ', '_')) = 'REJECTED'
@@ -128,7 +145,7 @@ const getCopilotData = ({ userId, role }) => {
      GROUP BY comment
      ORDER BY count DESC
      LIMIT 5`
-  ).all();
+  );
 
   return {
     summary: { pendingCount, overdueCount, myPending },
@@ -138,7 +155,7 @@ const getCopilotData = ({ userId, role }) => {
         ? 'Process highest-priority pending approvals'
         : 'Update details on pending requests',
     ],
-    topBlockers,
+    topBlockers: topBlockersResult.rows,
   };
 };
 

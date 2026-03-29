@@ -1,13 +1,13 @@
 const policyService = require('../services/policyService');
 
-const validateRequest = (req, res) => {
+const validateRequest = async (req, res) => {
   const requestId = Number(req.params.id);
 
   if (Number.isNaN(requestId)) {
     return res.status(400).json({ message: 'Invalid request id' });
   }
 
-  const result = policyService.validateRequestById(requestId);
+  const result = await policyService.validateRequestById(requestId);
   if (!result.found) {
     return res.status(404).json({ message: 'Request not found' });
   }

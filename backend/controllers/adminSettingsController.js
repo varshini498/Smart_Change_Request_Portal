@@ -1,30 +1,37 @@
-const db = require('../config/db');
+const { query } = require('../config/db');
 const respond = require('../utils/respond');
 const systemConfigService = require('../services/systemConfigService');
 
-exports.getSettings = (req, res) => {
+exports.getSettings = async (req, res) => {
   try {
-    const rows = systemConfigService.getSettingsForPanel();
+    const result = await query('SELECT key, value FROM settings');
+    const valuesByKey = new Map(result.rows.map((row) => [row.key, String(row.value ?? '')]));
+    const rows = Object.values(systemConfigService.SETTING_DEFINITIONS).map((definition) => ({
+      ...definition,
+      value: valuesByKey.get(definition.key) ?? definition.defaultValue,
+    }));
     return respond(res, true, rows);
   } catch (err) {
     return respond(res, false, err.message, 500);
   }
 };
 
-exports.upsertSetting = (req, res) => {
+exports.upsertSetting = async (req, res) => {
   try {
     const { key, value } = req.body || {};
     if (!key) return respond(res, false, 'key is required', 400);
     const validation = systemConfigService.validateSetting(String(key), value);
     if (!validation.ok) return respond(res, false, validation.message, 400);
 
-    db.prepare(
+    await query(
       `INSERT INTO settings (key, value)
-       VALUES (?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-    ).run(String(key), validation.value);
+       VALUES ($1, $2)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [String(key), validation.value]
+    );
+    await systemConfigService.refreshCache();
 
-    const definition = systemConfigService.getSettingsForPanel().find((row) => row.key === key);
+    const definition = systemConfigService.SETTING_DEFINITIONS[String(key)];
     return respond(res, true, {
       ...(definition || { key }),
       key,
@@ -35,15 +42,16 @@ exports.upsertSetting = (req, res) => {
   }
 };
 
-exports.deleteSetting = (req, res) => {
+exports.deleteSetting = async (req, res) => {
   try {
     const { key } = req.params;
     if (!key) return respond(res, false, 'key is required', 400);
     if (systemConfigService.SETTING_DEFINITIONS[String(key)]) {
       return respond(res, false, 'Core system settings cannot be deleted', 400);
     }
-    const result = db.prepare('DELETE FROM settings WHERE key = ?').run(String(key));
-    if (!result.changes) return respond(res, false, 'Setting not found', 404);
+    const result = await query('DELETE FROM settings WHERE key = $1', [String(key)]);
+    if (!result.rowCount) return respond(res, false, 'Setting not found', 404);
+    await systemConfigService.refreshCache();
     return respond(res, true, { key });
   } catch (err) {
     return respond(res, false, err.message, 500);

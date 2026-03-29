@@ -1,11 +1,11 @@
-const db = require('../config/db');
+const { query } = require('../config/db');
 const respond = require('../utils/respond');
 
 const parseDate = (value) => (value ? String(value) : null);
 const normalizeStatus = (value) => String(value || '').trim().toUpperCase().replace(/\s+/g, '_');
 const nowIso = () => new Date().toISOString();
 
-exports.getAllRequests = (req, res) => {
+exports.getAllRequests = async (req, res) => {
   try {
     const {
       status,
@@ -26,67 +26,75 @@ exports.getAllRequests = (req, res) => {
              u.name AS employee_name,
              u.role AS employee_role,
              COALESCE(r.category, r.type) AS type,
-             COALESCE(r.created_at, r.dateCreated) AS created_at,
-             COALESCE(r.due_date, r.dueDate) AS due_date,
+             COALESCE(r.created_at, r."dateCreated") AS created_at,
+             COALESCE(r.due_date, r."dueDate") AS due_date,
              CASE
-               WHEN DATE(COALESCE(r.due_date, r.dueDate)) < DATE('now') THEN 'OVERDUE'
-               WHEN DATE(COALESCE(r.due_date, r.dueDate)) = DATE('now') THEN 'DUE_TODAY'
+               WHEN CAST(COALESCE(r.due_date, r."dueDate") AS DATE) < CURRENT_DATE THEN 'OVERDUE'
+               WHEN CAST(COALESCE(r.due_date, r."dueDate") AS DATE) = CURRENT_DATE THEN 'DUE_TODAY'
                ELSE 'NORMAL'
              END AS deadline_status
       FROM requests r
-      JOIN users u ON COALESCE(r.created_by, r.createdBy) = u.id
+      JOIN users u ON COALESCE(r.created_by, r."createdBy") = u.id
       WHERE 1=1
     `;
     const params = [];
 
     if (status) {
-      sql += " AND UPPER(REPLACE(COALESCE(r.status, ''), ' ', '_')) = ?";
+      sql += ` AND UPPER(REPLACE(COALESCE(r.status, ''), ' ', '_')) = $${params.length + 1}`;
       params.push(normalizeStatus(status));
     }
     if (employee) {
-      sql += ' AND u.name LIKE ?';
+      sql += ` AND u.name ILIKE $${params.length + 1}`;
       params.push(`%${employee}%`);
     }
     if (role) {
-      sql += ' AND u.role = ?';
+      sql += ` AND u.role = $${params.length + 1}`;
       params.push(role);
     }
     if (from) {
-      sql += ' AND COALESCE(r.created_at, r.dateCreated) >= ?';
+      sql += ` AND COALESCE(r.created_at, r."dateCreated") >= $${params.length + 1}`;
       params.push(parseDate(from));
     }
     if (to) {
-      sql += ' AND COALESCE(r.created_at, r.dateCreated) <= ?';
+      sql += ` AND COALESCE(r.created_at, r."dateCreated") <= $${params.length + 1}`;
       params.push(parseDate(to));
     }
 
     const countSql = `SELECT COUNT(*) AS count FROM (${sql}) AS filtered`;
-    const totalCount = db.prepare(countSql).get(...params).count;
+    const countResult = await query(countSql, params);
+    const totalCount = Number(countResult.rows[0]?.count || 0);
 
-    sql += ' ORDER BY datetime(COALESCE(r.created_at, r.dateCreated)) DESC, r.id DESC LIMIT ? OFFSET ?';
+    sql += ` ORDER BY CAST(COALESCE(r.created_at, r."dateCreated") AS TIMESTAMP) DESC, r.id DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     const pageParams = params.concat([limitNum, offset]);
 
-    const rows = db.prepare(sql).all(...pageParams);
+    const rowsResult = await query(sql, pageParams);
+    const rows = rowsResult.rows;
 
-    const approvalsStmt = db.prepare(
-      `SELECT id, approval_level_id, level_name, approved_by, status, action, comment, timestamp
-       FROM request_approvals
-       WHERE request_id = ?
-       ORDER BY datetime(COALESCE(timestamp, '1970-01-01T00:00:00.000Z')) ASC, id ASC`
+    const data = await Promise.all(
+      rows.map(async (row) => {
+        const approvalsResult = await query(
+          `SELECT id, approval_level_id, level_name, approved_by, status, action, comment, timestamp
+           FROM request_approvals
+           WHERE request_id = $1
+           ORDER BY CAST(COALESCE(timestamp, '1970-01-01T00:00:00.000Z') AS TIMESTAMP) ASC, id ASC`,
+          [row.id]
+        );
+
+        const auditResult = await query(
+          `SELECT id, "requestId" AS request_id, action, "actorId" AS user_id, "actorRole" AS user_role, comment, "createdAt" AS timestamp
+           FROM audit_logs
+           WHERE "requestId" = $1
+           ORDER BY CAST("createdAt" AS TIMESTAMP) ASC, id ASC`,
+          [row.id]
+        );
+
+        return {
+          ...row,
+          approvals: approvalsResult.rows,
+          audit_logs: auditResult.rows,
+        };
+      })
     );
-
-    const auditStmt = db.prepare(
-      `SELECT id, requestId AS request_id, action, actorId AS user_id, actorRole AS user_role, comment, createdAt AS timestamp
-       FROM audit_logs
-       WHERE requestId = ?
-       ORDER BY datetime(createdAt) ASC, id ASC`
-    );
-
-    const data = rows.map((row) => ({
-      ...row,
-      approvals: approvalsStmt.all(row.id),
-      audit_logs: auditStmt.all(row.id),
-    }));
 
     return respond(res, true, {
       page: pageNum,
@@ -99,7 +107,7 @@ exports.getAllRequests = (req, res) => {
   }
 };
 
-exports.overrideRequest = (req, res) => {
+exports.overrideRequest = async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { status, reason } = req.body || {};
@@ -119,19 +127,21 @@ exports.overrideRequest = (req, res) => {
       completedAt = now;
     }
 
-    db.prepare(
+    await query(
       `UPDATE requests
-       SET status = ?,
-           overall_status = ?,
-           current_level = ?,
-           completed_at = ?
-       WHERE id = ?`
-    ).run(nextStatus, nextStatus, nextLevel, completedAt, id);
+       SET status = $1,
+           overall_status = $2,
+           current_level = $3,
+           completed_at = $4
+       WHERE id = $5`,
+      [nextStatus, nextStatus, nextLevel, completedAt, id]
+    );
 
-    db.prepare(
-      `INSERT INTO audit_logs (requestId, action, actorId, actorRole, comment, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(id, `Override: ${nextStatus}`, req.user.id, req.user.role, String(reason), now);
+    await query(
+      `INSERT INTO audit_logs ("requestId", action, "actorId", "actorRole", comment, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, `Override: ${nextStatus}`, req.user.id, req.user.role, String(reason), now]
+    );
 
     return respond(res, true, { id, status: nextStatus, current_level: nextLevel });
   } catch (err) {
@@ -139,12 +149,13 @@ exports.overrideRequest = (req, res) => {
   }
 };
 
-exports.escalateRequest = (req, res) => {
+exports.escalateRequest = async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return respond(res, false, 'Invalid request id', 400);
 
-    const request = db.prepare('SELECT id, status, current_level, title FROM requests WHERE id = ?').get(id);
+    const requestResult = await query('SELECT id, status, current_level, title FROM requests WHERE id = $1', [id]);
+    const request = requestResult.rows[0];
     if (!request) return respond(res, false, 'Request not found', 404);
     if (normalizeStatus(request.status) !== 'PENDING') {
       return respond(res, false, 'Only pending requests can be escalated', 400);
@@ -154,19 +165,21 @@ exports.escalateRequest = (req, res) => {
     }
 
     const now = nowIso();
-    db.prepare(
+    await query(
       `UPDATE requests
        SET current_level = 2,
            status = 'ESCALATED',
            overall_status = 'ESCALATED',
-           actionDate = ?
-       WHERE id = ?`
-    ).run(now, id);
+           "actionDate" = $1
+       WHERE id = $2`,
+      [now, id]
+    );
 
-    db.prepare(
-      `INSERT INTO audit_logs (requestId, action, actorId, actorRole, comment, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(id, 'Escalated to MANAGER', req.user.id, req.user.role, 'Admin escalation', now);
+    await query(
+      `INSERT INTO audit_logs ("requestId", action, "actorId", "actorRole", comment, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, 'Escalated to MANAGER', req.user.id, req.user.role, 'Admin escalation', now]
+    );
 
     return respond(res, true, { id, status: 'ESCALATED', current_level: 2 });
   } catch (err) {
@@ -174,7 +187,7 @@ exports.escalateRequest = (req, res) => {
   }
 };
 
-exports.bulkAction = (req, res) => {
+exports.bulkAction = async (req, res) => {
   try {
     const { action, request_ids: requestIds } = req.body || {};
     const normalizedAction = String(action || '').trim().toLowerCase();
@@ -207,29 +220,27 @@ exports.bulkAction = (req, res) => {
       completedAt = now;
     }
 
-    const updateStmt = db.prepare(
-      `UPDATE requests
-       SET status = ?,
-           overall_status = ?,
-           current_level = ?,
-           completed_at = COALESCE(?, completed_at),
-           actionDate = ?
-       WHERE id = ?`
-    );
-
-    const auditStmt = db.prepare(
-      `INSERT INTO audit_logs (requestId, action, actorId, actorRole, comment, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-
     let updated = 0;
-    ids.forEach((id) => {
-      const info = updateStmt.run(nextStatus, nextStatus, nextLevel, completedAt, now, id);
-      if (info.changes > 0) {
+    for (const id of ids) {
+      const result = await query(
+        `UPDATE requests
+         SET status = $1,
+             overall_status = $2,
+             current_level = $3,
+             completed_at = COALESCE($4, completed_at),
+             "actionDate" = $5
+         WHERE id = $6`,
+        [nextStatus, nextStatus, nextLevel, completedAt, now, id]
+      );
+      if (result.rowCount > 0) {
         updated += 1;
-        auditStmt.run(id, `Bulk ${normalizedAction.toUpperCase()}`, req.user.id, req.user.role, null, now);
+        await query(
+          `INSERT INTO audit_logs ("requestId", action, "actorId", "actorRole", comment, "createdAt")
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, `Bulk ${normalizedAction.toUpperCase()}`, req.user.id, req.user.role, null, now]
+        );
       }
-    });
+    }
 
     return respond(res, true, { action: normalizedAction, updated });
   } catch (err) {
@@ -237,12 +248,13 @@ exports.bulkAction = (req, res) => {
   }
 };
 
-exports.deleteRequest = (req, res) => {
+exports.deleteRequest = async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (Number.isNaN(id)) return respond(res, false, 'Invalid request id', 400);
 
-    const request = db.prepare('SELECT id, status, current_level FROM requests WHERE id = ?').get(id);
+    const requestResult = await query('SELECT id, status, current_level FROM requests WHERE id = $1', [id]);
+    const request = requestResult.rows[0];
     if (!request) return respond(res, false, 'Request not found', 404);
 
     const status = normalizeStatus(request.status);
@@ -258,17 +270,18 @@ exports.deleteRequest = (req, res) => {
     }
 
     const now = nowIso();
-    db.prepare('DELETE FROM request_approvals WHERE request_id = ?').run(id);
-    db.prepare('DELETE FROM notifications WHERE request_id = ?').run(id);
-    db.prepare('DELETE FROM audit_logs WHERE requestId = ?').run(id);
-    const info = db.prepare('DELETE FROM requests WHERE id = ?').run(id);
+    await query('DELETE FROM request_approvals WHERE request_id = $1', [id]);
+    await query('DELETE FROM notifications WHERE request_id = $1', [id]);
+    await query('DELETE FROM audit_logs WHERE "requestId" = $1', [id]);
+    const result = await query('DELETE FROM requests WHERE id = $1', [id]);
 
-    if (!info.changes) return respond(res, false, 'Request not found', 404);
+    if (!result.rowCount) return respond(res, false, 'Request not found', 404);
 
-    db.prepare(
-      `INSERT INTO audit_logs (requestId, action, actorId, actorRole, comment, createdAt)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(id, 'Admin deleted request', req.user.id, req.user.role, null, now);
+    await query(
+      `INSERT INTO audit_logs ("requestId", action, "actorId", "actorRole", comment, "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, 'Admin deleted request', req.user.id, req.user.role, null, now]
+    );
 
     return respond(res, true, { id, deleted: true });
   } catch (err) {

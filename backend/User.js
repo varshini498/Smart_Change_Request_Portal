@@ -1,11 +1,11 @@
-const db = require('./config/db'); // Ensure this points to your better-sqlite3 instance
+const { query } = require('./config/db');
 
 const User = {
   // FEATURE: Restored Identity View & Live Analytics
-  findAll: () => {
+  findAll: async () => {
     try {
-      const stmt = db.prepare("SELECT id, name, email, role, roll_no FROM users");
-      return stmt.all(); // This restores all user info for the registry
+      const result = await query("SELECT id, name, email, role, roll_no FROM users");
+      return result.rows;
     } catch (err) {
       console.error("Database Error in findAll:", err);
       return [];
@@ -13,10 +13,10 @@ const User = {
   },
 
   // FEATURE: Master Admin Login
-  findByEmail: (email) => {
+  findByEmail: async (email) => {
     try {
-      const stmt = db.prepare("SELECT * FROM users WHERE email = ?");
-      return stmt.get(email); // Returns the specific user for RBAC verification
+      const result = await query("SELECT * FROM users WHERE email = $1", [email]);
+      return result.rows[0] || null;
     } catch (err) {
       console.error("Database Error in findByEmail:", err);
       return null;

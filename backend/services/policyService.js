@@ -1,4 +1,4 @@
-const db = require('../config/db');
+const { query } = require('../config/db');
 
 const parseRuleJson = (rawRule) => {
   try {
@@ -26,15 +26,17 @@ const evaluateRule = (rule, request) => {
   };
 };
 
-const validateRequestById = (requestId) => {
-  const request = db.prepare('SELECT * FROM requests WHERE id = ?').get(requestId);
+const validateRequestById = async (requestId) => {
+  const requestResult = await query('SELECT * FROM requests WHERE id = $1', [requestId]);
+  const request = requestResult.rows[0];
   if (!request) {
     return { found: false, violations: [], warnings: [] };
   }
 
-  const rules = db
-    .prepare('SELECT id, name, scope, rule_json, is_active FROM policy_rules WHERE is_active = 1')
-    .all();
+  const rulesResult = await query(
+    'SELECT id, name, scope, rule_json, is_active FROM policy_rules WHERE is_active = 1'
+  );
+  const rules = rulesResult.rows;
 
   const violations = [];
   const warnings = [];

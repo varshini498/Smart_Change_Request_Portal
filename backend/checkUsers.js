@@ -1,5 +1,11 @@
-const db = require('./config/db'); // make sure path is correct
+const { query } = require('./config/db');
 
-// Fetch all users
-const rows = db.prepare('SELECT * FROM users').all();
-console.log('Users table contents:', rows);
+const main = async () => {
+  const result = await query('SELECT * FROM users');
+  console.log('Users table contents:', result.rows);
+};
+
+main().catch((error) => {
+  console.error('Failed to fetch users:', error.message);
+  process.exit(1);
+});

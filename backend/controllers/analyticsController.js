@@ -13,15 +13,15 @@ const getFilters = (req) => {
   };
 };
 
-const getEmployee = (req, res) => {
-  const payload = analyticsService.getEmployeeAnalytics(getFilters(req));
+const getEmployee = async (req, res) => {
+  const payload = await analyticsService.getEmployeeAnalytics(getFilters(req));
   payload.categoryData = payload.byCategory;
   return res.json({ success: true, data: payload });
 };
 
-const getOverview = (req, res) => {
+const getOverview = async (req, res) => {
   const filters = getFilters(req);
-  const payload = analyticsService.getOverview(filters);
+  const payload = await analyticsService.getOverview(filters);
   payload.categoryData = payload.byCategory;
   return res.json({
     success: true,
@@ -31,30 +31,31 @@ const getOverview = (req, res) => {
   });
 };
 
-const getDepartmentStats = (req, res) => {
+const getDepartmentStats = async (req, res) => {
   const filter = analyticsService.buildFilters(getFilters(req));
-  const stats = analyticsService.getDepartmentStats(filter);
+  const stats = await analyticsService.getDepartmentStats(filter);
   return res.json({ success: true, data: stats, departmentStats: stats });
 };
 
-const getApprovalTime = (req, res) => {
+const getApprovalTime = async (req, res) => {
   const filter = analyticsService.buildFilters(getFilters(req));
-  const approvalTime = analyticsService.getApprovalTime(filter);
+  const approvalTime = await analyticsService.getApprovalTime(filter);
   return res.json({ success: true, data: approvalTime, approvalTime });
 };
 
-const getOverdueTrends = (req, res) => {
+const getOverdueTrends = async (req, res) => {
   const filter = analyticsService.buildFilters(getFilters(req));
-  const trends = analyticsService.getOverdueTrends(filter);
+  const trends = await analyticsService.getOverdueTrends(filter);
   return res.json({ success: true, data: trends, overdueTrends: trends });
 };
 
-const exportExcel = (req, res) => {
+const exportExcel = async (req, res) => {
   const filters = getFilters(req);
-  const overview = analyticsService.getOverview(filters);
-  const departmentStats = analyticsService.getDepartmentStats(analyticsService.buildFilters(filters));
-  const overdueTrends = analyticsService.getOverdueTrends(analyticsService.buildFilters(filters));
-  const approvalTime = analyticsService.getApprovalTime(analyticsService.buildFilters(filters));
+  const builtFilters = analyticsService.buildFilters(filters);
+  const overview = await analyticsService.getOverview(filters);
+  const departmentStats = await analyticsService.getDepartmentStats(builtFilters);
+  const overdueTrends = await analyticsService.getOverdueTrends(builtFilters);
+  const approvalTime = await analyticsService.getApprovalTime(builtFilters);
 
   const workbook = XLSX.utils.book_new();
 
@@ -84,9 +85,9 @@ const exportExcel = (req, res) => {
   return res.send(buffer);
 };
 
-const exportPdf = (req, res) => {
+const exportPdf = async (req, res) => {
   const filters = getFilters(req);
-  const overview = analyticsService.getOverview(filters);
+  const overview = await analyticsService.getOverview(filters);
   const doc = new PDFDocument({ margin: 40, size: 'A4' });
 
   res.setHeader('Content-Type', 'application/pdf');
