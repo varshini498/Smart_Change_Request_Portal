@@ -5,6 +5,15 @@ const cors = require('cors');
 const path = require('path');
 const { initPromise } = require('./config/db');
 const app = express();
+const allowedOrigins = [
+  'https://smart-change-request-portal-3.onrender.com', // your frontend URL
+  'http://localhost:5173'  // local dev
+];
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
 
 app.use(cors());
 app.use(express.json());
