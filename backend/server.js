@@ -6,7 +6,7 @@ const path = require('path');
 const { initPromise } = require('./config/db');
 const app = express();
 const allowedOrigins = [
-  'https://smart-change-request-portal-3.onrender.com', // your frontend URL
+  'https://smart-change-request-portal-4.onrender.com', // your frontend URL
   'http://localhost:5173'  // local dev
 ];
 
@@ -15,7 +15,7 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(cors());
+
 app.use(express.json());
 
 // Routes
