@@ -20,6 +20,6 @@ Tech Stack
     
     Backend: Node.js, Express.js
     
-    Database: SQLite
+    Database: PostgreSQL
     
     Authentication: JWT
