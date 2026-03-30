@@ -1,7 +1,9 @@
 /* App.css */
 
-/* Center everything vertically and horizontally */
-body, html, #root {
+/* Keep the shell full-height without forcing oversized fixed layouts. */
+body,
+html,
+#root {
   height: 100%;
   margin: 0;
   font-family: "Inter", "Poppins", system-ui, sans-serif;
@@ -9,23 +11,29 @@ body, html, #root {
 }
 
 .container {
+  /* Responsive content wrapper for simple pages and auth-like screens. */
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  height: 100%;
+  min-height: 100%;
+  width: min(100% - 2rem, 72rem);
+  margin: 0 auto;
+  padding: 1rem;
   color: #fff;
   text-align: center;
 }
 
 .card {
+  /* Avoid fixed card sizing so the page fits standard browser zoom. */
   background: #ffffff;
   color: #1f2937;
   padding: 2rem;
   border-radius: 1rem;
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
-  width: 350px;
-  max-width: 90%;
+  width: 100%;
+  max-width: 28rem;
+  margin: 0 auto;
 }
 
 h1 {
@@ -82,4 +90,16 @@ a:hover {
 .error {
   color: red;
   margin-top: 0.5rem;
+}
+
+@media (max-width: 768px) {
+  .container {
+    width: min(100% - 1.25rem, 100%);
+    padding: 0.75rem;
+  }
+
+  .card {
+    padding: 1.5rem;
+    max-width: 100%;
+  }
 }
